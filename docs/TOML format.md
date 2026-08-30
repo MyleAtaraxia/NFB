@@ -48,6 +48,7 @@ name = "ninja"
 source = "package"
 ref="v1.12.1"
 url="https://github.com/username/ninja-nfb/" # will auto install using the package manifest from the toml
+# path = "llvm.nfb.toml" # needs to be manually overriden, by default 
 #for git urls it assumes that the package is at /package.nfb.toml
 
 [[dependency]]
@@ -74,7 +75,7 @@ to = "build/libs/"
 ```
 
 ## Package TOML
-The default convention that will be pulled from gihub etc for packages is package.nfb.toml, it *can* be changed but it is not advised for the user-facing packages for convenience reasons
+The default file that will be used from git etc. is package.nfb.toml, it *can* be changed, but it is not advised for the user-facing packages for convenience reasons
 
 ### Example
 ```toml
