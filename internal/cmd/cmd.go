@@ -11,6 +11,7 @@ var (
 	outputPath   string
 	noCache      bool
 	verbose      bool
+	initPath     string
 )
 
 var rootCmd = &cobra.Command{
@@ -39,7 +40,7 @@ var initCmd = &cobra.Command{
 			return err
 		}
 
-		return initToml(name, projectType)
+		return initToml(name, projectType, initPath)
 	},
 }
 
@@ -66,6 +67,7 @@ func init() {
 	buildCmd.Flags().StringVarP(&outputPath, "output", "o", "", "Override the output path from the manifest")
 	buildCmd.Flags().BoolVar(&noCache, "no-cache", false, "Force a clean rebuild, skip cache mounts")
 	buildCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Stream full Docker build output")
+	initCmd.Flags().StringVarP(&initPath, "path", "p", "", "Directory or full path (including filename) to write the manifest to. Defaults to the current directory using the standard filename for the chosen type.")
 
 	rootCmd.AddCommand(buildCmd, initCmd, cleanCmd, graphCmd)
 }
