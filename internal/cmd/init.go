@@ -13,14 +13,16 @@ const (
 
 var unknownProjectTypeError = errors.New("unknown project type")
 
-func initToml(projectName string, projectType string) error {
-	replacer := strings.NewReplacer("{{name}}", projectName)
+func initToml(projectName string, projectType string, pathOverride string) error {
+	replacer := strings.NewReplacer("{{projectName}}", projectName)
+
+	path := resolveManifestPath(pathOverride, projectType+".nfb.toml")
 
 	switch projectType {
 	case tomlTypeProject:
-		return os.WriteFile("build.nfb.toml", []byte(replacer.Replace(defaultProjectTemplate)), 0644)
+		return os.WriteFile(path, []byte(replacer.Replace(defaultProjectTemplate)), 0644)
 	case tomlTypePackage:
-		return os.WriteFile("package.nfb.toml", []byte(replacer.Replace(defaultPackageTemplate)), 0644)
+		return os.WriteFile(path, []byte(replacer.Replace(defaultPackageTemplate)), 0644)
 	default:
 		return unknownProjectTypeError
 	}

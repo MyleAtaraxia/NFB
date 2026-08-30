@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -19,4 +20,14 @@ func promptString(question string, defaultValue string) (string, error) {
 		return input, nil
 	}
 	return defaultValue, nil
+}
+
+func resolveManifestPath(givenPath, defaultFilename string) string {
+	if givenPath == "" {
+		return defaultFilename
+	}
+	if filepath.Ext(givenPath) == ".toml" {
+		return givenPath
+	}
+	return filepath.Join(givenPath, defaultFilename)
 }
