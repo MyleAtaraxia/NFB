@@ -12,17 +12,16 @@ The `build.nfb.toml`(or whatever else it is named) file defines a project's buil
 [project]
 name = "nfb" # name in the project section cannot be removed and must be present.
 version = "4.2.0"
-output = "dist/nfb"
 
 [build]
 image="debian:bookworm-slim" # can be any docker image
-[build.env]
-GOOS="windows"
-
 command = [
   "cmake -B build -G Ninja -DCMAKE_C_COMPILER=zig cc -DCMAKE_CXX_COMPILER=zig c++ -DCMAKE_BUILD_TYPE=Release",
   "cmake --build build"
 ]
+
+[build.env]
+GOOS="windows"
 
 [[dependency]]
 name = "go-compiler" # name is an optional field that is there purely for debugging / verbosity and readability reasons, it can be safely removed
@@ -34,32 +33,25 @@ command = [
 [[dependency]]
 name = "zig"
 source = "git"
-url = "https://github.com/ziglang/zig"
+url = "https://github.com/ziglang/zig-nfb"
 ref = "0.16.0"
-
-# commands are executed inside of the root repo folder
-command = [
-  "cmake -B build -G Ninja",
-  "cmake --build build --target install"
-]
 
 [[dependency]]
 name = "ninja"
-source = "package"
-ref="v1.12.1"
-url="https://github.com/username/ninja-nfb/" # will auto install using the package manifest from the toml
-# path = "llvm.nfb.toml" # needs to be manually overriden, by default 
-#for git urls it assumes that the package is at /package.nfb.toml
+source = "git"
+url = "https://github.com/username/ninja-nfb" # will auto install using the package manifest from the repo
+ref = "v1.12.1"
+# path = "llvm.nfb.toml" # file inside the repo, defaults to package.nfb.toml
 
 [[dependency]]
 name = "LLVM"
-source = "package"
-url="https://raw.githubusercontent.com/username/2026.0/llvm-nfb/llvm.nfb.toml"
-#can be any package name for the direct links
+source = "url"
+url = "https://raw.githubusercontent.com/username/2026.0/llvm-nfb/llvm.nfb.toml" # direct link, can be any file name
+sha256 = "..." # optional, checksum of the file at url
 
 [[dependency]]
-source = "package"
-path = "package.nfb.toml" # also works with filesystem paths
+source = "local"
+path = "package.nfb.toml" # relative to this manifest
 
 [output]
 dir = "dist" # the directory where the artifacts live
@@ -74,6 +66,17 @@ to = "build/libs/"
 
 ```
 
+### Dependency sources
+
+`source` says where a dependency comes from. Everything except `cmd` is an NFB package. A field not listed for a source is an error.
+
+| `source` | Required           | Optional       | Description                                |
+|----------|--------------------|----------------|--------------------------------------------|
+| `cmd`    | `command`          | `name`         | Runs the commands to install the dependency |
+| `git`    | `url`, `ref`       | `name`, `path` | Package in a git repository                |
+| `url`    | `url`              | `name`, `sha256` | Package manifest at a direct link        |
+| `local`  | `path`             | `name`         | Package manifest on the filesystem         |
+
 ## Package TOML
 The default file that will be used from git etc. is package.nfb.toml, it *can* be changed, but it is not advised for the user-facing packages for convenience reasons
 
@@ -86,8 +89,6 @@ version = "4.2.0"
 [build] # exact same build step setup as above
 image="debian:bookworm-slim"
 command = [
-    "git clone https://github.com/user/repo",
-    "cd repo",
     "cmake build"
 ]
 
@@ -100,13 +101,113 @@ command = [
 
 # no need to define [output] dir as that is handled by NFB.
 [[output.artifact]]
-from = "repo/bin"
+from = "bin"
 to = "." # will output it to {package-name}/bin/ as the bin didnt have a / at the end
 
-# ran before the build step of a project from the packages root output folder
+# ran when the package is imported, from the packages root output folder
 [init]
 command=[
-    "export DEPENDENCY=bin/binary"
+    'export PATH="$PWD/bin:$PATH"', # use absolute paths, the working directory changes after init
+    'export DEPENDENCY="$PWD/bin/binary"'
 ]
 
 ```
+
+### Source
+
+The optional `[source]` section tells NFB to download a package's source. It is only valid in a package.
+
+```toml
+[package]
+name = "LLVM"
+version = "19.1.0"
+
+[source]
+url = "https://example.com/llvm-project-19.1.0.src.tar.xz" # .tar.gz, .tar.xz or .zip
+sha256 = "..." # optional, checksum of the file at url
+
+[build]
+image = "debian:bookworm-slim"
+command = [
+    "cmake -S llvm-project-19.1.0.src/llvm -B build",
+    "cmake --build build"
+]
+```
+
+`url` is required and `sha256` is optional. NFB verifies the checksum, then unpacks the archive as it is into the build's starting directory before any commands run.
+
+## Build behaviour
+
+NFB generates a Dockerfile and runs it with `docker build --output type=local`. Dependencies are built first, each in its own image.
+
+### Build contents
+
+- The project's source is copied into the container.
+- A `git` package starts with its repository checked out at `ref`, including submodules.
+- A `local` package's source is the folder containing its manifest.
+- A `url` package only has its manifest, so it gets its source through `[source]` or fetches it in `command`.
+- Package outputs are available at `/nfb/deps/{package-name}/`, using the name from `[package]`.
+
+### Commands
+
+All commands in a build run in one shell with `set -e`, so the first failing command stops the build. They run in this order:
+
+1. `cmd` dependencies
+2. `[init]` of each package dependency, from that package's root output folder. NFB returns to the starting directory afterwards.
+3. `[build]`
+
+`[init]` is a package's import hook, like an `on_import()` function. It runs in the shell of the project or package importing it, and does not run when the package itself is built. Packages add to `PATH` and other environment variables by exporting them in `[init]`. A project cannot be imported, so `[init]` in a project is an error.
+
+### Dependency rules
+
+- Only direct dependencies are visible. If A depends on B and B depends on C, A does not see C's outputs or `[init]`.
+- Each package builds against its own dependency versions.
+- Two versions of the same package in one consumer is an error.
+- `[build.env]` is not inherited. A package only gets the environment it declares.
+- `source = "local"` is rejected in packages fetched through `git` or `url`.
+- A `local` path can use `../` to reach folders outside the manifest's own.
+- A `git` path must stay inside the repository, so `../` and absolute paths are errors.
+- A dependency must be a package. A project manifest cannot be used as one.
+- `version` is required in a package. It does not have to match `ref`.
+
+### Caching and pinning
+
+A build is identified by its manifest hash, dependency hashes, image, environment and architecture.
+
+Branch names in `ref` and image tags such as `debian:bookworm-slim` are allowed. `nfb.lock` records the resolved commits, image digests and checksums.
+
+When a `url` download has no `sha256`, NFB saves its checksum to `nfb.lock` on the first fetch. Later builds fail if the file changes.
+
+## Output paths
+
+| Path               | Relative to                                                     |
+|--------------------|-----------------------------------------------------------------|
+| `from`             | The build's starting directory, even after a `cd`. Absolute paths are allowed. |
+| `to` in a project  | `output.dir`, which defaults to `dist`                          |
+| `to` in a package  | `{package-name}/`                                               |
+
+A trailing slash on `from` copies the folder's contents. A `to` that ends in `/` or is `.` is a folder to copy into. Any other `to` is the exact final path.
+
+| `from`                 | `to`      | Result                         |
+|------------------------|-----------|--------------------------------|
+| `a/tool` (file)        | `bin/app` | `bin/app`                      |
+| `a/tool` (file)        | `bin/`    | `bin/tool`                     |
+| `a/tool` (file)        | `.`       | `tool`                         |
+| `repo/bin` (folder)    | `.`       | `bin/...`                      |
+| `repo/bin` (folder)    | `libs/`   | `libs/bin/...`                 |
+| `repo/bin` (folder)    | `libs`    | `libs/...`                     |
+| `repo/bin/` (contents) | `.`       | Contents in the root           |
+| `repo/bin/` (contents) | `libs/`   | `libs/...`                     |
+| `repo/bin/` (contents) | `libs`    | `libs/...`                     |
+
+These are errors:
+
+- `from` does not exist, or has a trailing slash but is a file
+- Two artifacts write to the same path
+- `to` is absolute or escapes with `../`
+- `[output] dir` is set in a package
+- A project has no artifacts
+
+A package with no artifacts is allowed, for packages that only provide `[init]`.
+
+Wildcards are not supported. Symlinks and file permissions are kept. Declared artifacts are overwritten, and nothing else in `output.dir` is deleted.

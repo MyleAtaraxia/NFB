@@ -1,81 +1,84 @@
 package cmd
 
 import (
-	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
-const (
-	tomlTypeProject = "project"
-	tomlTypePackage = "package"
-)
-
-var unknownProjectTypeError = errors.New("unknown project type")
-
-func initToml(projectName string, projectType string, pathOverride string) error {
-	replacer := strings.NewReplacer("{{projectName}}", projectName)
-
-	path := resolveManifestPath(pathOverride, projectType+".nfb.toml")
-
+func initToml(name, projectType, pathOverride string) error {
+	var template, filename string
 	switch projectType {
-	case tomlTypeProject:
-		return os.WriteFile(path, []byte(replacer.Replace(defaultProjectTemplate)), 0644)
-	case tomlTypePackage:
-		return os.WriteFile(path, []byte(replacer.Replace(defaultPackageTemplate)), 0644)
+	case "project":
+		template, filename = defaultProjectTemplate, "build.nfb.toml"
+	case "package":
+		template, filename = defaultPackageTemplate, "package.nfb.toml"
 	default:
-		return unknownProjectTypeError
+		return fmt.Errorf("unknown project type %q", projectType)
 	}
+
+	path := pathOverride
+	if path == "" {
+		path = filename
+	} else if filepath.Ext(path) != ".toml" {
+		path = filepath.Join(path, filename)
+	}
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.WriteString(strings.ReplaceAll(template, "{{projectName}}", name))
+	return err
 }
 
-const defaultProjectTemplate = `
-[project]
-name = "{projectName}" # name in the project section cannot be removed and must be present.
+const defaultProjectTemplate = `[project]
+name = "{{projectName}}" # name in the project section cannot be removed and must be present.
 version = "0.1.0"
-output = "dist/{projectName}"
- 
+
 [build]
 image = "debian:bookworm-slim" # can be any docker image
- 
 command = [
-  "echo 'add your build steps here'"
+  "mkdir -p bin",
+  "echo 'add your build steps here' > bin/{{projectName}}"
 ]
- 
+
 # [[dependency]]
 # name = "example" # optional, for debugging/readability only
-# source = "cmd"    # cmd | git | download | package
+# source = "cmd"   # cmd | git | url | local
 # command = [
 #   "apt install -y example"
 # ]
- 
+
 [output]
 dir = "dist" # the directory where the artifacts live
- 
+
 [[output.artifact]]
-from = "bin/{projectName}"
-to = "{projectName}"
+from = "bin/{{projectName}}"
+to = "{{projectName}}"
 `
 
-const defaultPackageTemplate = `
-[package]
-name = "{projectName}" # name in the package definition must be present too.
+const defaultPackageTemplate = `[package]
+name = "{{projectName}}" # name in the package definition must stay the same.
 version = "0.1.0"
- 
+
 [build] # exact same build step setup as a project manifest
 image = "debian:bookworm-slim"
- 
 command = [
-  "echo 'add your build steps here'"
+  "mkdir -p bin",
+  "echo 'add your build steps here' > bin/{{projectName}}"
 ]
- 
+
 # no need to define [output] dir, it is handled by NFB.
-# [[output.artifact]]
-# from = "bin"
-# to = "." # will output it to {projectName}/bin/ since 'bin' has no trailing slash
- 
-# ran before the build step of a consuming project, in the same shell session
-# [init]
-# command = [
-#   "export EXAMPLE_PATH=bin/"
-# ]
+[[output.artifact]]
+from = "bin"
+to = "." # will output it to {{projectName}}/bin/ as bin has no trailing slash
+
+# ran when the package is imported, from the package's root output folder
+[init]
+command = [
+  'export PATH="$PWD/bin:$PATH"'
+]
 `

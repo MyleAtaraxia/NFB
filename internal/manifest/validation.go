@@ -2,78 +2,190 @@ package manifest
 
 import (
 	"errors"
-	"log/slog"
+	"fmt"
+	"net/url"
+	"path/filepath"
+	"regexp"
+	"strings"
 )
 
-var UnspecifiedManifestImage = errors.New("unspecified manifest image")
-var unknownManifestTypeError = errors.New("unknown manifest type")
-var doubleDefinedManifestTypeError = errors.New("double defined manifest type")
-var manifestNameUndefinedError = errors.New("manifest name undefined")
-var manifestIncorrectSourceError = errors.New("manifest incorrect source")
-var manifestIncorrectArtifactError = errors.New("manifest incorrect artifact")
-var noBuildCommandsError = errors.New("no build commands provided")
+var (
+	namePattern   = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
+	envPattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	imagePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]*$`)
+	sha256Pattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+)
 
-func ValidateManifest(manifest *Manifest) error {
-	if manifest.Project == nil && manifest.Package == nil {
-		return unknownManifestTypeError
+func Validate(m *Manifest) error {
+	if m.Project == nil && m.Package == nil {
+		return errors.New("manifest needs a [project] or [package] section")
 	}
-	if manifest.Project != nil && manifest.Package != nil {
-		return doubleDefinedManifestTypeError
+	if m.Project != nil && m.Package != nil {
+		return errors.New("manifest cannot have both [project] and [package]")
 	}
-	if manifest.Project != nil {
-		if manifest.Project.Name == "" {
-			return manifestNameUndefinedError
+	if !namePattern.MatchString(m.Identity().Name) {
+		return fmt.Errorf("invalid name %q", m.Identity().Name)
+	}
+	if !imagePattern.MatchString(m.Build.Image) {
+		return fmt.Errorf("invalid or missing build image %q", m.Build.Image)
+	}
+	for key := range m.Build.Env {
+		if !envPattern.MatchString(key) {
+			return fmt.Errorf("invalid env name %q", key)
 		}
-	}
-	if manifest.Package != nil {
-		if manifest.Package.Name == "" {
-			return manifestNameUndefinedError
-		}
-	}
-	for _, dependency := range manifest.Dependencies {
-		depID := dependency.Name
-		if depID == "" {
-			depID = dependency.URL
-		}
-		switch dependency.Source {
-		case "git":
-			if dependency.URL == "" || dependency.Ref == "" {
-				slog.Error("manifest validation failed", "dependency", depID, "error", manifestIncorrectSourceError)
-				return manifestIncorrectSourceError
-			}
-		case "cmd":
-			if len(dependency.Commands) == 0 {
-				slog.Error("manifest validation failed", "dependency", depID, "error", manifestIncorrectSourceError)
-				return manifestIncorrectSourceError
-			}
-		case "package":
-			if dependency.Path == "" && dependency.URL == "" {
-				slog.Error("manifest validation failed", "dependency", depID, "error", manifestIncorrectSourceError)
-				return manifestIncorrectSourceError
-			}
-		default:
-			slog.Error("manifest validation failed", "dependency", depID, "error", manifestIncorrectSourceError)
-			return manifestIncorrectSourceError
-		}
-	}
-	if manifest.Output != nil {
-		for _, artifact := range manifest.Output.Artifacts {
-			if artifact.From == "" {
-				slog.Error("manifest validation failed", "artifact_to", artifact.To, "error", manifestIncorrectArtifactError)
-				return manifestIncorrectArtifactError
-			}
-			if artifact.To == "" {
-				slog.Error("manifest validation failed", "artifact_from", artifact.From, "error", manifestIncorrectArtifactError)
-				return manifestIncorrectArtifactError
-			}
-		}
-	}
-	if len(manifest.Build.Commands) == 0 {
-		return noBuildCommandsError
-	}
-	if manifest.Build.Image == "" {
-		return UnspecifiedManifestImage
 	}
 
+	if m.Project != nil {
+		if err := validateProject(m); err != nil {
+			return err
+		}
+	} else if err := validatePackage(m); err != nil {
+		return err
+	}
+
+	for _, dep := range m.Dependencies {
+		if err := validateDependency(dep); err != nil {
+			return err
+		}
+	}
+	return validateArtifacts(m.Artifacts())
+}
+
+func validateProject(m *Manifest) error {
+	switch {
+	case len(m.Build.Commands) == 0:
+		return errors.New("project has no build commands")
+	case m.Source != nil:
+		return errors.New("[source] is only valid in a package")
+	case m.Init != nil:
+		return errors.New("[init] is only valid in a package, a project cannot be imported")
+	case len(m.Artifacts()) == 0:
+		return errors.New("project has no artifacts")
+	}
 	return nil
+}
+
+func validatePackage(m *Manifest) error {
+	if m.Package.Version == "" {
+		return errors.New("package has no version")
+	}
+	if m.Output != nil && m.Output.Dir != "" {
+		return errors.New("[output] dir cannot be set in a package")
+	}
+	if m.Source != nil {
+		if err := validateURL(m.Source.URL); err != nil {
+			return fmt.Errorf("[source]: %w", err)
+		}
+		if ArchiveExt(m.Source.URL) == "" {
+			return fmt.Errorf("[source]: %s is not a .tar.gz, .tar.xz or .zip", m.Source.URL)
+		}
+		if err := validateSHA256(m.Source.SHA256); err != nil {
+			return fmt.Errorf("[source]: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateDependency(dep Dependency) error {
+	label := dep.Name
+	if label == "" {
+		label = dep.Source + " dependency"
+	}
+	fail := func(format string, args ...any) error {
+		return fmt.Errorf("%s: %s", label, fmt.Sprintf(format, args...))
+	}
+	forbid := func(fields map[string]bool) error {
+		for field, set := range fields {
+			if set {
+				return fail("field %q is not valid for source %q", field, dep.Source)
+			}
+		}
+		return nil
+	}
+
+	url, ref, path, sha, command := dep.URL != "", dep.Ref != "", dep.Path != "", dep.SHA256 != "", len(dep.Commands) > 0
+
+	switch dep.Source {
+	case "cmd":
+		if !command {
+			return fail("source \"cmd\" needs command")
+		}
+		return forbid(map[string]bool{"url": url, "ref": ref, "path": path, "sha256": sha})
+	case "git":
+		if !url || !ref {
+			return fail("source \"git\" needs url and ref")
+		}
+		if path && !filepath.IsLocal(filepath.FromSlash(dep.Path)) {
+			return fail("git path %q must stay inside the repository", dep.Path)
+		}
+		return forbid(map[string]bool{"sha256": sha, "command": command})
+	case "url":
+		if err := validateURL(dep.URL); err != nil {
+			return fail("%v", err)
+		}
+		if err := validateSHA256(dep.SHA256); err != nil {
+			return fail("%v", err)
+		}
+		return forbid(map[string]bool{"ref": ref, "path": path, "command": command})
+	case "local":
+		if !path {
+			return fail("source \"local\" needs path")
+		}
+		return forbid(map[string]bool{"url": url, "ref": ref, "sha256": sha, "command": command})
+	default:
+		return fail("unknown source %q", dep.Source)
+	}
+}
+
+func validateArtifacts(artifacts []Artifact) error {
+	seen := map[string]bool{}
+	for _, a := range artifacts {
+		if a.From == "" || a.To == "" {
+			return errors.New("artifact needs from and to")
+		}
+		for _, p := range []string{a.From, a.To} {
+			if strings.ContainsAny(p, "*?[$\\\n") {
+				return fmt.Errorf("artifact path %q has an unsupported character", p)
+			}
+		}
+		if !filepath.IsLocal(filepath.FromSlash(a.To)) {
+			return fmt.Errorf("artifact to %q must stay inside the output folder", a.To)
+		}
+		// shortcut: only catches identical destinations, overlaps inside folders need the built file list.
+		if dest := a.Dest(); seen[dest] {
+			return fmt.Errorf("two artifacts write to %s", dest)
+		} else {
+			seen[dest] = true
+		}
+	}
+	return nil
+}
+
+func validateURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("%q is not an http(s) url", raw)
+	}
+	return nil
+}
+
+func validateSHA256(sum string) error {
+	if sum != "" && !sha256Pattern.MatchString(sum) {
+		return fmt.Errorf("%q is not a sha256 checksum", sum)
+	}
+	return nil
+}
+
+// ArchiveExt returns the archive type of a download URL, or "" if unsupported.
+func ArchiveExt(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	for _, ext := range []string{".tar.gz", ".tar.xz", ".zip"} {
+		if strings.HasSuffix(u.Path, ext) {
+			return ext
+		}
+	}
+	return ""
 }
