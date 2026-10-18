@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -46,6 +47,11 @@ func (g *Graph) SaveLock() error {
 	return os.WriteFile(g.LockPath, data, 0o644)
 }
 
+// LockChanged reports whether this run resolved anything differently from nfb.lock.
+func (g *Graph) LockChanged() bool {
+	return !reflect.DeepEqual(g.Lock, g.oldLock)
+}
+
 // PinImages fills Graph.Images with the digest form of each image.
 func (g *Graph) PinImages() {
 	for _, u := range g.Units {
@@ -58,7 +64,7 @@ func (g *Graph) PinImages() {
 			g.Images[image] = image
 			continue
 		}
-		if digest == "" || g.noCache {
+		if digest == "" {
 			digest = imageDigest(image)
 		}
 		if digest == "" {

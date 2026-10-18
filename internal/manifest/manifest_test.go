@@ -62,6 +62,8 @@ func TestRejects(t *testing.T) {
 		"bad name":              strings.Replace(validPackage, `"pkg"`, `"../x"`, 1),
 		"package no version":    strings.Replace(validPackage, `version = "1.0.0"`, "", 1),
 		"bad image":             strings.Replace(validPackage, "debian:bookworm-slim", "a\\nRUN evil", 1),
+		"bad secret name":       strings.Replace(validPackage, `command = ["true"]`, `secrets = ["A B"]`, 1),
+		"git ref is a flag":     dep("source = \"git\"\nurl = \"u\"\nref = \"--upload-pack=x\"\n"),
 		"project init":          validProject + "[init]\ncommand = [\"x\"]\n",
 		"project source":        validProject + "[source]\nurl = \"https://a.b/c.zip\"\n",
 		"project no artifacts":  strings.Split(validProject, "[[output")[0],

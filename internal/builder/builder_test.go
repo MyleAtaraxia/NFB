@@ -51,7 +51,7 @@ func TestGenerateDockerfile(t *testing.T) {
 	}}
 	root := &resolver.Unit{SourceDir: "/src", Deps: []*resolver.Unit{dep}, Manifest: &manifest.Manifest{
 		Project: &manifest.Identity{Name: "app"},
-		Build:   manifest.Build{Image: "debian:12"},
+		Build:   manifest.Build{Image: "debian:12", Secrets: []string{"TOKEN"}},
 		Output:  &manifest.Output{Artifacts: []manifest.Artifact{{From: "bin/", To: "out/"}, {From: "/usr/bin/x", To: "."}}},
 	}}
 	g := &resolver.Graph{Units: []*resolver.Unit{dep, root}, Images: map[string]string{"debian:12": "debian:12@sha256:abc"}}
@@ -73,6 +73,7 @@ func TestGenerateDockerfile(t *testing.T) {
 		"FROM debian:12@sha256:abc AS nfb_u1",
 		"COPY --from=nfb_u0_out / /nfb/deps/tool/",
 		"COPY --exclude=dist --from=nfb_src1 . ./",
+		"RUN --mount=type=cache,id=nfb-cache-app,target=/nfb/cache,sharing=locked --mount=type=secret,id=TOKEN,env=TOKEN [",
 		`COPY --from=nfb_u1 ["/nfb/src/bin/","/out/"]`,
 		`COPY --from=nfb_u1 ["/usr/bin/x","/x"]`,
 	} {

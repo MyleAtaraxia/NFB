@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,7 +47,7 @@ func TestBuildOrderAndDiamond(t *testing.T) {
 	write(t, dir+"/b/package.nfb.toml", pkg("b", local("../c/package.nfb.toml")))
 	root := write(t, dir+"/package.nfb.toml", pkg("a", local("b/package.nfb.toml")+local("c/package.nfb.toml")))
 
-	g, err := Resolve(root, false)
+	g, err := Resolve(root, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestErrors(t *testing.T) {
 		"cycle":        dir + "/loop/a.toml",
 	}
 	for name, root := range cases {
-		if _, err := Resolve(root, false); err == nil {
+		if _, err := Resolve(root, Options{}); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
 	}
@@ -104,9 +105,12 @@ func TestGitPinsCommitAndRejectsLocalInside(t *testing.T) {
 	dep := "[[dependency]]\nsource = \"git\"\nurl = \"" + filepath.ToSlash(repo) + "\"\nref = \"main\"\n"
 	root := write(t, dir+"/package.nfb.toml", pkg("a", dep))
 
-	g, err := Resolve(root, false)
+	g, err := Resolve(root, Options{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !g.LockChanged() {
+		t.Error("a first resolve should change the lock")
 	}
 	if err := g.SaveLock(); err != nil {
 		t.Fatal(err)
@@ -119,16 +123,27 @@ func TestGitPinsCommitAndRejectsLocalInside(t *testing.T) {
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-qm", "two")
 
-	again, err := Resolve(root, false)
+	again, err := Resolve(root, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := again.Lock.Git[filepath.ToSlash(repo)+"#main"]; got != first {
 		t.Errorf("lock moved to %s, want %s", got, first)
 	}
+	if again.LockChanged() {
+		t.Error("a pinned resolve should not change the lock")
+	}
+
+	updated, err := Resolve(root, Options{Update: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.Lock.Git[filepath.ToSlash(repo)+"#main"]; got == first {
+		t.Error("update kept the old commit")
+	}
 
 	withPath := dep + "path = \"nested/evil.toml\"\n"
-	if _, err := Resolve(write(t, dir+"/evil.toml", pkg("b", withPath)), false); err == nil {
+	if _, err := Resolve(write(t, dir+"/evil.toml", pkg("b", withPath)), Options{}); err == nil {
 		t.Error("expected local inside a fetched package to fail")
 	}
 }
@@ -164,7 +179,7 @@ func TestGitSubmodules(t *testing.T) {
 	git(t, repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", filepath.ToSlash(sub), "sub")
 	commitAll(t, repo)
 
-	g, err := Resolve(write(t, dir+"/package.nfb.toml", pkg("a", gitDep(repo))), false)
+	g, err := Resolve(write(t, dir+"/package.nfb.toml", pkg("a", gitDep(repo))), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,11 +213,88 @@ func TestSubmoduleCannotUseCommandTransport(t *testing.T) {
 	git(t, repo, "update-index", "--add", "--cacheinfo", "160000,"+git(t, repo, "rev-parse", "HEAD")+",evil")
 	git(t, repo, "commit", "-qm", "gitlink")
 
-	if _, err := Resolve(write(t, dir+"/package.nfb.toml", pkg("a", gitDep(repo))), false); err == nil {
+	if _, err := Resolve(write(t, dir+"/package.nfb.toml", pkg("a", gitDep(repo))), Options{}); err == nil {
 		t.Error("expected the ext submodule to fail")
 	}
 	if exists(marker) {
 		t.Error("the ext transport ran a command")
+	}
+}
+
+func TestGitRefCanBeAnOlderCommit(t *testing.T) {
+	tempCache(t)
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	write(t, repo+"/package.nfb.toml", pkg("remote", ""))
+	write(t, repo+"/version.txt", "one\n")
+	git(t, repo, "init", "-q", "-b", "main")
+	commitAll(t, repo)
+	old := git(t, repo, "rev-parse", "HEAD")
+	write(t, repo+"/version.txt", "two\n")
+	commitAll(t, repo)
+
+	dep := strings.Replace(gitDep(repo), `"main"`, `"`+old+`"`, 1)
+	g, err := Resolve(write(t, dir+"/package.nfb.toml", pkg("a", dep)), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(g.Units[0].SourceDir, "version.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "one\n" {
+		t.Errorf("checked out %q", got)
+	}
+}
+
+func TestFetchedPackageCannotAskForSecrets(t *testing.T) {
+	tempCache(t)
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	write(t, repo+"/package.nfb.toml", strings.Replace(pkg("remote", ""), `image = "x"`, "image = \"x\"\nsecrets = [\"AWS_KEY\"]", 1))
+	git(t, repo, "init", "-q", "-b", "main")
+	commitAll(t, repo)
+
+	_, err := Resolve(write(t, dir+"/package.nfb.toml", pkg("a", gitDep(repo))), Options{})
+	if err == nil || !strings.Contains(err.Error(), "secrets") {
+		t.Errorf("expected a secrets error, got %v", err)
+	}
+}
+
+func TestHostTokenOnlyGoesToItsHostOverHTTPS(t *testing.T) {
+	tempCache(t)
+	var got string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Authorization")
+		w.Write([]byte(pkg("private", "")))
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	defer func() { httpClient = http.DefaultClient }()
+	t.Setenv("NFB_TOKEN_127_0_0_1", "abc")
+
+	dir := t.TempDir()
+	root := write(t, dir+"/package.nfb.toml", pkg("a", "[[dependency]]\nsource = \"url\"\nurl = \""+server.URL+"/m.toml\"\n"))
+	if _, err := Resolve(root, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if got != "Bearer abc" {
+		t.Errorf("Authorization = %q", got)
+	}
+
+	insecure, err := url.Parse("http://127.0.0.1/m.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hostToken(insecure) != "" {
+		t.Error("token sent over plain http")
+	}
+	other, err := url.Parse("https://example.com/m.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hostToken(other) != "" {
+		t.Error("token sent to another host")
 	}
 }
 
@@ -217,7 +309,7 @@ func TestURLChecksums(t *testing.T) {
 	dir := t.TempDir()
 	root := write(t, dir+"/package.nfb.toml", pkg("a", "[[dependency]]\nsource = \"url\"\nurl = \""+server.URL+"/m.toml\"\n"))
 
-	g, err := Resolve(root, false)
+	g, err := Resolve(root, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,13 +322,13 @@ func TestURLChecksums(t *testing.T) {
 	}
 
 	body = pkg("changed", "")
-	if _, err := Resolve(root, true); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+	if _, err := Resolve(root, Options{NoCache: true}); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Errorf("expected a checksum mismatch, got %v", err)
 	}
 
 	wrong := strings.Repeat("0", 64)
 	bad := write(t, dir+"/bad.toml", pkg("b", "[[dependency]]\nsource = \"url\"\nurl = \""+server.URL+"/m.toml\"\nsha256 = \""+wrong+"\"\n"))
-	if _, err := Resolve(bad, false); err == nil {
+	if _, err := Resolve(bad, Options{}); err == nil {
 		t.Error("expected a declared checksum mismatch to fail")
 	}
 }

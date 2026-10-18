@@ -34,6 +34,11 @@ func Validate(m *Manifest) error {
 			return fmt.Errorf("invalid env name %q", key)
 		}
 	}
+	for _, name := range m.Build.Secrets {
+		if !envPattern.MatchString(name) {
+			return fmt.Errorf("invalid secret name %q", name)
+		}
+	}
 
 	if m.Project != nil {
 		if err := validateProject(m); err != nil {
@@ -114,6 +119,9 @@ func validateDependency(dep Dependency) error {
 	case "git":
 		if !url || !ref {
 			return fail("source \"git\" needs url and ref")
+		}
+		if strings.HasPrefix(dep.Ref, "-") {
+			return fail("invalid ref %q", dep.Ref)
 		}
 		if path && !filepath.IsLocal(filepath.FromSlash(dep.Path)) {
 			return fail("git path %q must stay inside the repository", dep.Path)

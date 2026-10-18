@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,14 +66,19 @@ func (r *resolver) checkout(url, ref string, remote bool) (dir, commit string, e
 		return strings.TrimSpace(string(out)), nil
 	}
 
-	for _, args := range [][]string{
-		{"init", "-q"},
-		{"fetch", "-q", "--depth", "1", "--", url, target},
-		{"checkout", "-q", "--detach", "FETCH_HEAD"},
-	} {
-		if _, err := git(args...); err != nil {
+	if _, err := git("init", "-q"); err != nil {
+		return "", "", err
+	}
+	head := "FETCH_HEAD"
+	if _, err := git("fetch", "-q", "--depth", "1", "--", url, target); err != nil {
+		// Servers can refuse a commit that isn't a branch tip, so search the whole history.
+		if _, fullErr := git("fetch", "-q", "--", url, "+refs/*:refs/nfb/*"); fullErr != nil {
 			return "", "", fmt.Errorf("fetching %s at %s: %w", url, target, err)
 		}
+		head = target
+	}
+	if _, err := git("checkout", "-q", "--detach", head); err != nil {
+		return "", "", fmt.Errorf("fetching %s at %s: %w", url, target, err)
 	}
 	// Some servers refuse shallow fetches of a pinned commit that isn't a branch tip.
 	if _, err := git("submodule", "update", "--init", "--recursive", "--depth", "1"); err != nil {
@@ -100,6 +106,27 @@ func (r *resolver) checkout(url, ref string, remote bool) (dir, commit string, e
 	}
 	r.graph.Lock.Git[key] = commit
 	return dir, commit, nil
+}
+
+var httpClient = http.DefaultClient
+
+func fetch(raw string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, raw, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token := hostToken(req.URL); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return httpClient.Do(req)
+}
+
+// hostToken is tied to the host, so a manifest can't send a token to a server of its choosing.
+func hostToken(u *neturl.URL) string {
+	if u.Scheme != "https" {
+		return ""
+	}
+	return os.Getenv("NFB_TOKEN_" + strings.NewReplacer(".", "_", "-", "_").Replace(strings.ToUpper(u.Hostname())))
 }
 
 // removeGitData also covers the .git files submodules leave behind, which point at a deleted folder.
@@ -141,7 +168,7 @@ func (r *resolver) download(url, want string) (file, sum string, err error) {
 	defer tmp.Close()
 
 	fmt.Fprintln(os.Stderr, "fetching", url)
-	resp, err := http.Get(url)
+	resp, err := fetch(url)
 	if err != nil {
 		return "", "", err
 	}

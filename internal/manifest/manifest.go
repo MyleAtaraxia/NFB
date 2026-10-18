@@ -35,6 +35,7 @@ type Build struct {
 	Image    string            `toml:"image"`
 	Env      map[string]string `toml:"env"`
 	Commands []string          `toml:"command"`
+	Secrets  []string          `toml:"secrets"`
 }
 
 type Dependency struct {

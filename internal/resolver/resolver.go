@@ -53,7 +53,13 @@ func CacheDir() (string, error) {
 	return filepath.Join(dir, "nfb"), nil
 }
 
-func Resolve(manifestPath string, noCache bool) (*Graph, error) {
+// Options changes how Resolve treats what is already pinned or cached.
+type Options struct {
+	NoCache bool
+	Update  bool
+}
+
+func Resolve(manifestPath string, opts Options) (*Graph, error) {
 	root, err := filepath.Abs(manifestPath)
 	if err != nil {
 		return nil, err
@@ -71,9 +77,12 @@ func Resolve(manifestPath string, noCache bool) (*Graph, error) {
 	if err != nil {
 		return nil, err
 	}
+	if opts.Update {
+		oldLock = newLock()
+	}
 
 	r := &resolver{
-		graph: &Graph{LockPath: lockPath, Lock: newLock(), Images: map[string]string{}, noCache: noCache, oldLock: oldLock},
+		graph: &Graph{LockPath: lockPath, Lock: newLock(), Images: map[string]string{}, noCache: opts.NoCache, oldLock: oldLock},
 		cache: cache,
 		units: map[string]*Unit{},
 	}
@@ -91,6 +100,9 @@ func (r *resolver) unit(key string, m *manifest.Manifest, dir string, remote boo
 	id := m.Identity().Name + "@" + m.Identity().Version
 	if slices.Contains(r.stack, id) {
 		return nil, fmt.Errorf("dependency cycle: %s -> %s", strings.Join(r.stack, " -> "), id)
+	}
+	if remote && len(m.Build.Secrets) > 0 {
+		return nil, fmt.Errorf("%s: a fetched package cannot ask for secrets", id)
 	}
 	r.stack = append(r.stack, id)
 	defer func() { r.stack = r.stack[:len(r.stack)-1] }()

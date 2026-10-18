@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	srcDir  = "/nfb/src"
-	depsDir = "/nfb/deps"
+	srcDir   = "/nfb/src"
+	depsDir  = "/nfb/deps"
+	cacheDir = "/nfb/cache"
 )
 
 var excludablePath = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
@@ -63,6 +64,11 @@ func Build(g *resolver.Graph, opts Options) (string, error) {
 	if opts.NoCache {
 		args = append(args, "--no-cache")
 	}
+	secrets, err := hostSecrets(g)
+	if err != nil {
+		return "", err
+	}
+	args = append(args, secrets...)
 
 	cmd := exec.Command("docker", append(append(args, "--progress=plain"), gen)...)
 	cmd.Env = append(cmd.Environ(), "DOCKER_BUILDKIT=1")
@@ -77,6 +83,21 @@ func Build(g *resolver.Graph, opts Options) (string, error) {
 		return "", fmt.Errorf("docker build: %w", err)
 	}
 	return out, nil
+}
+
+func hostSecrets(g *resolver.Graph) ([]string, error) {
+	var args []string
+	for _, u := range g.Units {
+		for _, name := range u.Manifest.Build.Secrets {
+			if _, ok := os.LookupEnv(name); !ok {
+				return nil, fmt.Errorf("%s needs the secret %s, but it isn't set", u.Name(), name)
+			}
+			if flag := "id=" + name + ",env=" + name; !slices.Contains(args, flag) {
+				args = append(args, "--secret", flag)
+			}
+		}
+	}
+	return args, nil
 }
 
 func outputDir(g *resolver.Graph, override string) (string, error) {
@@ -143,7 +164,7 @@ func generate(g *resolver.Graph, gen, out string) (map[string]string, error) {
 		if err := os.WriteFile(filepath.Join(gen, dir, "run.sh"), []byte(script(u)), 0o644); err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(&df, "COPY %s/run.sh /nfb/run.sh\nRUN [\"/bin/sh\", \"/nfb/run.sh\"]\n", dir)
+		fmt.Fprintf(&df, "COPY %s/run.sh /nfb/run.sh\nRUN %s [\"/bin/sh\", \"/nfb/run.sh\"]\n", dir, mounts(u))
 
 		fmt.Fprintf(&df, "FROM scratch AS %s\n", outStage(i))
 		for _, a := range m.Artifacts() {
@@ -163,6 +184,14 @@ func generate(g *resolver.Graph, gen, out string) (map[string]string, error) {
 	}
 
 	return contexts, os.WriteFile(filepath.Join(gen, "Dockerfile"), []byte(df.String()), 0o644)
+}
+
+func mounts(u *resolver.Unit) string {
+	flags := []string{fmt.Sprintf("--mount=type=cache,id=nfb-cache-%s,target=%s,sharing=locked", u.Name(), cacheDir)}
+	for _, name := range u.Manifest.Build.Secrets {
+		flags = append(flags, fmt.Sprintf("--mount=type=secret,id=%s,env=%s", name, name))
+	}
+	return strings.Join(flags, " ")
 }
 
 // excludeOutput keeps earlier artifacts out of the source, where they would defeat the cache.
@@ -244,6 +273,7 @@ func script(u *resolver.Unit) string {
 	m := u.Manifest
 	var b strings.Builder
 	b.WriteString("set -e\n")
+	fmt.Fprintf(&b, "export NFB_CACHE=%s\n", cacheDir)
 
 	for _, key := range slices.Sorted(maps.Keys(m.Build.Env)) {
 		fmt.Fprintf(&b, "export %s=%s\n", key, quote(m.Build.Env[key]))
