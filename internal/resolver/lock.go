@@ -1,12 +1,13 @@
 package resolver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -44,7 +45,16 @@ func (g *Graph) SaveLock() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(g.LockPath, data, 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(g.LockPath), ".nfb.lock-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(data)
+	if err := errors.Join(err, tmp.Close(), os.Chmod(tmp.Name(), 0o644)); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), g.LockPath)
 }
 
 // LockChanged reports whether this run resolved anything differently from nfb.lock.
@@ -53,7 +63,7 @@ func (g *Graph) LockChanged() bool {
 }
 
 // PinImages fills Graph.Images with the digest form of each image.
-func (g *Graph) PinImages() {
+func (g *Graph) PinImages(ctx context.Context) error {
 	for _, u := range g.Units {
 		image := u.Manifest.Build.Image
 		if _, done := g.Images[image]; done {
@@ -65,7 +75,10 @@ func (g *Graph) PinImages() {
 			continue
 		}
 		if digest == "" {
-			digest = imageDigest(image)
+			digest = imageDigest(ctx, image)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if digest == "" {
 			slog.Warn("could not find a digest, using the tag unpinned", "image", image)
@@ -75,14 +88,17 @@ func (g *Graph) PinImages() {
 		g.Lock.Images[image] = digest
 		g.Images[image] = image + "@" + digest
 	}
+	return nil
 }
 
-func imageDigest(image string) string {
-	out, err := exec.Command("docker", "buildx", "imagetools", "inspect", image, "--format", "{{.Manifest.Digest}}").Output()
+func imageDigest(ctx context.Context, image string) string {
+	ctx, cancel := context.WithTimeout(ctx, stallTimeout)
+	defer cancel()
+	out, err := Command(ctx, "docker", "buildx", "imagetools", "inspect", image, "--format", "{{.Manifest.Digest}}").Output()
 	if err == nil {
 		return strings.TrimSpace(string(out))
 	}
-	out, err = exec.Command("docker", "image", "inspect", image, "--format", "{{index .RepoDigests 0}}").Output()
+	out, err = Command(ctx, "docker", "image", "inspect", image, "--format", "{{index .RepoDigests 0}}").Output()
 	if err != nil {
 		return ""
 	}

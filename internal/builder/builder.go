@@ -5,6 +5,7 @@ import (
 	"NFB/internal/resolver"
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 const (
@@ -33,8 +35,29 @@ type Options struct {
 	Verbose        bool
 }
 
+// CheckDocker fails early, before a slow download finds out Docker can't run the build.
+func CheckDocker(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := resolver.Command(ctx, "docker", "version", "--format", "{{.Server.Version}}").CombinedOutput()
+	if errors.Is(err, exec.ErrNotFound) {
+		return errors.New("docker isn't installed or isn't on PATH")
+	}
+	if err != nil {
+		return fmt.Errorf("docker isn't running: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// PruneCache empties every /nfb/cache without touching the rest of Docker's build cache.
+func PruneCache(ctx context.Context) error {
+	cmd := resolver.Command(ctx, "docker", "builder", "prune", "-f", "--filter", "description~=nfb-cache")
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
 // Build exports the root unit's artifacts and returns where they went.
-func Build(g *resolver.Graph, opts Options) (string, error) {
+func Build(ctx context.Context, g *resolver.Graph, opts Options) (string, error) {
 	cache, err := resolver.CacheDir()
 	if err != nil {
 		return "", err
@@ -70,7 +93,7 @@ func Build(g *resolver.Graph, opts Options) (string, error) {
 	}
 	args = append(args, secrets...)
 
-	cmd := exec.Command("docker", append(append(args, "--progress=plain"), gen)...)
+	cmd := resolver.Command(ctx, "docker", append(append(args, "--progress=plain"), gen)...)
 	cmd.Env = append(cmd.Environ(), "DOCKER_BUILDKIT=1")
 	var logs bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &logs, &logs
@@ -79,6 +102,9 @@ func Build(g *resolver.Graph, opts Options) (string, error) {
 	}
 	fmt.Fprintln(os.Stderr, "building", g.Root().Name())
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return "", errors.New("build interrupted")
+		}
 		os.Stderr.Write(logs.Bytes())
 		return "", fmt.Errorf("docker build: %w", err)
 	}

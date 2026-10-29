@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"NFB/internal/manifest"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -39,6 +40,7 @@ func (g *Graph) Root() *Unit {
 }
 
 type resolver struct {
+	ctx   context.Context
 	graph *Graph
 	cache string
 	units map[string]*Unit
@@ -59,7 +61,7 @@ type Options struct {
 	Update  bool
 }
 
-func Resolve(manifestPath string, opts Options) (*Graph, error) {
+func Resolve(ctx context.Context, manifestPath string, opts Options) (*Graph, error) {
 	root, err := filepath.Abs(manifestPath)
 	if err != nil {
 		return nil, err
@@ -72,6 +74,7 @@ func Resolve(manifestPath string, opts Options) (*Graph, error) {
 	if err != nil {
 		return nil, err
 	}
+	sweep(cache)
 	lockPath := filepath.Join(filepath.Dir(root), "nfb.lock")
 	oldLock, err := ReadLock(lockPath)
 	if err != nil {
@@ -82,6 +85,7 @@ func Resolve(manifestPath string, opts Options) (*Graph, error) {
 	}
 
 	r := &resolver{
+		ctx:   ctx,
 		graph: &Graph{LockPath: lockPath, Lock: newLock(), Images: map[string]string{}, noCache: opts.NoCache, oldLock: oldLock},
 		cache: cache,
 		units: map[string]*Unit{},

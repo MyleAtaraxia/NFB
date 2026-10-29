@@ -4,10 +4,13 @@ import (
 	"NFB/internal/builder"
 	"NFB/internal/resolver"
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -17,6 +20,7 @@ var (
 	outputPath   string
 	noCache      bool
 	locked       bool
+	cleanDocker  bool
 	verbose      bool
 	initPath     string
 )
@@ -32,11 +36,16 @@ var buildCmd = &cobra.Command{
 	Use:   "build",
 	Short: "Resolve dependencies and build the project",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		g, err := resolver.Resolve(manifestPath, resolver.Options{NoCache: noCache})
+		if err := builder.CheckDocker(cmd.Context()); err != nil {
+			return err
+		}
+		g, err := resolver.Resolve(cmd.Context(), manifestPath, resolver.Options{NoCache: noCache})
 		if err != nil {
 			return err
 		}
-		g.PinImages()
+		if err := g.PinImages(cmd.Context()); err != nil {
+			return err
+		}
 		if locked {
 			if g.LockChanged() {
 				return errors.New("nfb.lock is out of date, run nfb update")
@@ -44,7 +53,7 @@ var buildCmd = &cobra.Command{
 		} else if err := g.SaveLock(); err != nil {
 			return err
 		}
-		out, err := builder.Build(g, builder.Options{OutputOverride: outputPath, NoCache: noCache, Verbose: verbose})
+		out, err := builder.Build(cmd.Context(), g, builder.Options{OutputOverride: outputPath, NoCache: noCache, Verbose: verbose})
 		if err != nil {
 			return err
 		}
@@ -57,11 +66,13 @@ var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Re-resolve every git ref, checksum and image, and rewrite nfb.lock",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		g, err := resolver.Resolve(manifestPath, resolver.Options{Update: true})
+		g, err := resolver.Resolve(cmd.Context(), manifestPath, resolver.Options{Update: true})
 		if err != nil {
 			return err
 		}
-		g.PinImages()
+		if err := g.PinImages(cmd.Context()); err != nil {
+			return err
+		}
 		return g.SaveLock()
 	},
 }
@@ -91,7 +102,13 @@ var cleanCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return os.RemoveAll(dir)
+		if err := os.RemoveAll(dir); err != nil {
+			return err
+		}
+		if cleanDocker {
+			return builder.PruneCache(cmd.Context())
+		}
+		return nil
 	},
 }
 
@@ -99,11 +116,13 @@ var graphCmd = &cobra.Command{
 	Use:   "graph",
 	Short: "Print the resolved dependency graph in build order",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		g, err := resolver.Resolve(manifestPath, resolver.Options{})
+		g, err := resolver.Resolve(cmd.Context(), manifestPath, resolver.Options{})
 		if err != nil {
 			return err
 		}
-		g.PinImages()
+		if err := g.PinImages(cmd.Context()); err != nil {
+			return err
+		}
 		if err := g.SaveLock(); err != nil {
 			return err
 		}
@@ -137,6 +156,7 @@ func init() {
 	buildCmd.Flags().BoolVar(&locked, "locked", false, "Fail if nfb.lock is missing or out of date, and never write it")
 	buildCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Stream full Docker build output")
 	graphCmd.Flags().StringVarP(&manifestPath, "manifest", "m", "build.nfb.toml", "Path to the manifest file")
+	cleanCmd.Flags().BoolVar(&cleanDocker, "docker", false, "Also empty every project's /nfb/cache, so the next builds compile from scratch")
 	updateCmd.Flags().StringVarP(&manifestPath, "manifest", "m", "build.nfb.toml", "Path to the manifest file")
 	initCmd.Flags().StringVarP(&initPath, "path", "p", "", "Directory or full path (including filename) to write the manifest to. Defaults to the current directory using the standard filename for the chosen type.")
 
@@ -146,5 +166,7 @@ func init() {
 func Execute() error {
 	fmt.Println("\nWell hello there~")
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
-	return rootCmd.Execute()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return rootCmd.ExecuteContext(ctx)
 }

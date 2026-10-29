@@ -4,6 +4,7 @@ import (
 	"NFB/internal/manifest"
 	"NFB/internal/resolver"
 	"archive/zip"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,5 +110,34 @@ func TestUnzipRejectsEscape(t *testing.T) {
 	}
 	if err := unzip(build("../evil"), filepath.Join(dir, "out")); err == nil {
 		t.Error("expected an escaping entry to fail")
+	}
+}
+
+func TestInterruptedBuildCleansUp(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("LocalAppData", dir)
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("HOME", dir)
+	root := &resolver.Unit{Manifest: &manifest.Manifest{
+		Project: &manifest.Identity{Name: "app"},
+		Build:   manifest.Build{Image: "alpine:3"},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := Build(ctx, &resolver.Graph{Units: []*resolver.Unit{root}}, Options{})
+	if err == nil || !strings.Contains(err.Error(), "interrupted") {
+		t.Errorf("expected an interrupted error, got %v", err)
+	}
+	cache, err := resolver.CacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("left %d entries behind", len(entries))
 	}
 }

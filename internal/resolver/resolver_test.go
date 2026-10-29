@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
@@ -9,8 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func pkg(name, deps string) string {
@@ -47,7 +52,7 @@ func TestBuildOrderAndDiamond(t *testing.T) {
 	write(t, dir+"/b/package.nfb.toml", pkg("b", local("../c/package.nfb.toml")))
 	root := write(t, dir+"/package.nfb.toml", pkg("a", local("b/package.nfb.toml")+local("c/package.nfb.toml")))
 
-	g, err := Resolve(root, Options{})
+	g, err := Resolve(context.Background(), root, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +80,7 @@ func TestErrors(t *testing.T) {
 		"cycle":        dir + "/loop/a.toml",
 	}
 	for name, root := range cases {
-		if _, err := Resolve(root, Options{}); err == nil {
+		if _, err := Resolve(context.Background(), root, Options{}); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
 	}
@@ -105,7 +110,7 @@ func TestGitPinsCommitAndRejectsLocalInside(t *testing.T) {
 	dep := "[[dependency]]\nsource = \"git\"\nurl = \"" + filepath.ToSlash(repo) + "\"\nref = \"main\"\n"
 	root := write(t, dir+"/package.nfb.toml", pkg("a", dep))
 
-	g, err := Resolve(root, Options{})
+	g, err := Resolve(context.Background(), root, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +128,7 @@ func TestGitPinsCommitAndRejectsLocalInside(t *testing.T) {
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-qm", "two")
 
-	again, err := Resolve(root, Options{})
+	again, err := Resolve(context.Background(), root, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +139,7 @@ func TestGitPinsCommitAndRejectsLocalInside(t *testing.T) {
 		t.Error("a pinned resolve should not change the lock")
 	}
 
-	updated, err := Resolve(root, Options{Update: true})
+	updated, err := Resolve(context.Background(), root, Options{Update: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +148,7 @@ func TestGitPinsCommitAndRejectsLocalInside(t *testing.T) {
 	}
 
 	withPath := dep + "path = \"nested/evil.toml\"\n"
-	if _, err := Resolve(write(t, dir+"/evil.toml", pkg("b", withPath)), Options{}); err == nil {
+	if _, err := Resolve(context.Background(), write(t, dir+"/evil.toml", pkg("b", withPath)), Options{}); err == nil {
 		t.Error("expected local inside a fetched package to fail")
 	}
 }
@@ -179,7 +184,7 @@ func TestGitSubmodules(t *testing.T) {
 	git(t, repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", filepath.ToSlash(sub), "sub")
 	commitAll(t, repo)
 
-	g, err := Resolve(write(t, dir+"/package.nfb.toml", pkg("a", gitDep(repo))), Options{})
+	g, err := Resolve(context.Background(), write(t, dir+"/package.nfb.toml", pkg("a", gitDep(repo))), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +218,7 @@ func TestSubmoduleCannotUseCommandTransport(t *testing.T) {
 	git(t, repo, "update-index", "--add", "--cacheinfo", "160000,"+git(t, repo, "rev-parse", "HEAD")+",evil")
 	git(t, repo, "commit", "-qm", "gitlink")
 
-	if _, err := Resolve(write(t, dir+"/package.nfb.toml", pkg("a", gitDep(repo))), Options{}); err == nil {
+	if _, err := Resolve(context.Background(), write(t, dir+"/package.nfb.toml", pkg("a", gitDep(repo))), Options{}); err == nil {
 		t.Error("expected the ext submodule to fail")
 	}
 	if exists(marker) {
@@ -234,7 +239,7 @@ func TestGitRefCanBeAnOlderCommit(t *testing.T) {
 	commitAll(t, repo)
 
 	dep := strings.Replace(gitDep(repo), `"main"`, `"`+old+`"`, 1)
-	g, err := Resolve(write(t, dir+"/package.nfb.toml", pkg("a", dep)), Options{})
+	g, err := Resolve(context.Background(), write(t, dir+"/package.nfb.toml", pkg("a", dep)), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +260,7 @@ func TestFetchedPackageCannotAskForSecrets(t *testing.T) {
 	git(t, repo, "init", "-q", "-b", "main")
 	commitAll(t, repo)
 
-	_, err := Resolve(write(t, dir+"/package.nfb.toml", pkg("a", gitDep(repo))), Options{})
+	_, err := Resolve(context.Background(), write(t, dir+"/package.nfb.toml", pkg("a", gitDep(repo))), Options{})
 	if err == nil || !strings.Contains(err.Error(), "secrets") {
 		t.Errorf("expected a secrets error, got %v", err)
 	}
@@ -275,7 +280,7 @@ func TestHostTokenOnlyGoesToItsHostOverHTTPS(t *testing.T) {
 
 	dir := t.TempDir()
 	root := write(t, dir+"/package.nfb.toml", pkg("a", "[[dependency]]\nsource = \"url\"\nurl = \""+server.URL+"/m.toml\"\n"))
-	if _, err := Resolve(root, Options{}); err != nil {
+	if _, err := Resolve(context.Background(), root, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if got != "Bearer abc" {
@@ -309,7 +314,7 @@ func TestURLChecksums(t *testing.T) {
 	dir := t.TempDir()
 	root := write(t, dir+"/package.nfb.toml", pkg("a", "[[dependency]]\nsource = \"url\"\nurl = \""+server.URL+"/m.toml\"\n"))
 
-	g, err := Resolve(root, Options{})
+	g, err := Resolve(context.Background(), root, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,13 +327,240 @@ func TestURLChecksums(t *testing.T) {
 	}
 
 	body = pkg("changed", "")
-	if _, err := Resolve(root, Options{NoCache: true}); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+	if _, err := Resolve(context.Background(), root, Options{NoCache: true}); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Errorf("expected a checksum mismatch, got %v", err)
 	}
 
 	wrong := strings.Repeat("0", 64)
 	bad := write(t, dir+"/bad.toml", pkg("b", "[[dependency]]\nsource = \"url\"\nurl = \""+server.URL+"/m.toml\"\nsha256 = \""+wrong+"\"\n"))
-	if _, err := Resolve(bad, Options{}); err == nil {
+	if _, err := Resolve(context.Background(), bad, Options{}); err == nil {
 		t.Error("expected a declared checksum mismatch to fail")
+	}
+}
+
+func fastRetries(t *testing.T) {
+	t.Helper()
+	oldStall, oldDelay := stallTimeout, retryDelay
+	stallTimeout, retryDelay = 100*time.Millisecond, time.Millisecond
+	t.Cleanup(func() { stallTimeout, retryDelay = oldStall, oldDelay })
+}
+
+func urlProject(t *testing.T, serverURL string) string {
+	t.Helper()
+	return write(t, t.TempDir()+"/package.nfb.toml", pkg("a", "[[dependency]]\nsource = \"url\"\nurl = \""+serverURL+"/m.toml\"\n"))
+}
+
+func TestDownloadRetriesTemporaryFailures(t *testing.T) {
+	tempCache(t)
+	fastRetries(t)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte(pkg("remote", "")))
+	}))
+	defer server.Close()
+
+	if _, err := Resolve(context.Background(), urlProject(t, server.URL), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 3 {
+		t.Errorf("made %d attempts", calls.Load())
+	}
+}
+
+func TestDownloadRestartsCleanlyAfterTruncation(t *testing.T) {
+	tempCache(t)
+	fastRetries(t)
+	body := pkg("remote", "")
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Content-Length", "100000")
+			w.Write([]byte(body[:10]))
+			return
+		}
+		w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	g, err := Resolve(context.Background(), urlProject(t, server.URL), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(body))
+	if got := g.Lock.Checksums[server.URL+"/m.toml"]; got != hex.EncodeToString(sum[:]) {
+		t.Errorf("the retry kept data from the failed attempt: %s", got)
+	}
+}
+
+func TestDownloadDoesNotRetryNotFound(t *testing.T) {
+	tempCache(t)
+	fastRetries(t)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	if _, err := Resolve(context.Background(), urlProject(t, server.URL), Options{}); err == nil {
+		t.Fatal("expected an error")
+	}
+	if calls.Load() != 1 {
+		t.Errorf("made %d attempts", calls.Load())
+	}
+}
+
+func TestDownloadGivesUpWhenItStalls(t *testing.T) {
+	tempCache(t)
+	fastRetries(t)
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("partial"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-done:
+		}
+	}))
+	defer server.Close()
+	defer close(done)
+
+	_, err := Resolve(context.Background(), urlProject(t, server.URL), Options{})
+	if err == nil || !strings.Contains(err.Error(), "no data for") {
+		t.Errorf("expected a stall error, got %v", err)
+	}
+}
+
+func TestCancelStopsDownloadAndCleansUp(t *testing.T) {
+	tempCache(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("partial"))
+		w.(http.Flusher).Flush()
+		cancel()
+		select {
+		case <-r.Context().Done():
+		case <-done:
+		}
+	}))
+	defer server.Close()
+	defer close(done)
+
+	if _, err := Resolve(ctx, urlProject(t, server.URL), Options{}); err == nil {
+		t.Fatal("expected an error")
+	}
+	cache, err := CacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(cache, "downloads"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("left %d files behind", len(entries))
+	}
+}
+
+func TestParallelRunsShareTheCache(t *testing.T) {
+	tempCache(t)
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	write(t, repo+"/package.nfb.toml", pkg("gitpkg", ""))
+	git(t, repo, "init", "-q", "-b", "main")
+	commitAll(t, repo)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(pkg("urlpkg", "")))
+	}))
+	defer server.Close()
+	deps := gitDep(repo) + "[[dependency]]\nsource = \"url\"\nurl = \"" + server.URL + "/m.toml\"\n"
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for i := range 8 {
+		root := write(t, filepath.Join(dir, "p"+strings.Repeat("x", i), "package.nfb.toml"), pkg("a", deps))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := Resolve(context.Background(), root, Options{})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+func TestSweep(t *testing.T) {
+	cache := t.TempDir()
+	long := time.Now().Add(-2 * cacheMaxAge)
+	recent := time.Now().Add(-2 * tempMaxAge)
+	entries := map[string]struct {
+		age  time.Time
+		kept bool
+	}{
+		"build-old":        {recent, false},
+		"build-new":        {time.Now(), true},
+		"git/tmp-old":      {recent, false},
+		"git/abc":          {recent, true},
+		"git/unused":       {long, false},
+		"downloads/tmp-x":  {recent, false},
+		"downloads/abc":    {recent, true},
+		"downloads/unused": {long, false},
+	}
+	for name, entry := range entries {
+		file := write(t, filepath.Join(cache, name), "x")
+		if err := os.Chtimes(file, entry.age, entry.age); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dir := range []string{"git", "downloads"} {
+		if err := os.Chtimes(filepath.Join(cache, dir), long, long); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sweep(cache)
+	for name, entry := range entries {
+		if exists(filepath.Join(cache, name)) != entry.kept {
+			t.Errorf("%s: expected kept=%v", name, entry.kept)
+		}
+	}
+}
+
+func TestSaveLockLeavesNoTempFile(t *testing.T) {
+	dir := t.TempDir()
+	g := &Graph{LockPath: filepath.Join(dir, "nfb.lock"), Lock: newLock()}
+	if err := g.SaveLock(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("found %d files", len(entries))
+	}
+}
+
+func TestCommandStopsChildrenOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows leaves children running")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	Command(ctx, "cmd", "/c", "ping -n 30 127.0.0.1").CombinedOutput()
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("took %s to stop", took)
 	}
 }
