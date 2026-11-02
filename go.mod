@@ -1,4 +1,4 @@
-module NFB
+module github.com/MyleAtaraxia/NFB
 
 go 1.26
 

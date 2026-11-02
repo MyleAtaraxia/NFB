@@ -1,14 +1,14 @@
 package builder
 
 import (
-	"NFB/internal/manifest"
-	"NFB/internal/resolver"
 	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MyleAtaraxia/NFB/internal/manifest"
+	"github.com/MyleAtaraxia/NFB/internal/resolver"
 	"io"
 	"maps"
 	"os"

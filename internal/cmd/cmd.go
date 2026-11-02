@@ -1,12 +1,12 @@
 package cmd
 
 import (
-	"NFB/internal/builder"
-	"NFB/internal/resolver"
 	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/MyleAtaraxia/NFB/internal/builder"
+	"github.com/MyleAtaraxia/NFB/internal/resolver"
 	"os"
 	"os/signal"
 	"strings"

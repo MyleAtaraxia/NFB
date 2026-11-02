@@ -1,10 +1,10 @@
 package builder
 
 import (
-	"NFB/internal/manifest"
-	"NFB/internal/resolver"
 	"archive/zip"
 	"context"
+	"github.com/MyleAtaraxia/NFB/internal/manifest"
+	"github.com/MyleAtaraxia/NFB/internal/resolver"
 	"os"
 	"path/filepath"
 	"strings"

@@ -1,10 +1,10 @@
 package resolver
 
 import (
-	"NFB/internal/manifest"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/MyleAtaraxia/NFB/internal/manifest"
 	"os"
 	"path/filepath"
 	"slices"
