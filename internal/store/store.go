@@ -68,7 +68,7 @@ func Index(ctx context.Context, repo, rev, rawBase string) (*resolver.Store, err
 	if err != nil {
 		return nil, err
 	}
-	store := &resolver.Store{Schema: 1, Packages: map[string]*resolver.StorePackage{}}
+	store := &resolver.Store{Schema: resolver.StoreSchema, Packages: map[string]*resolver.StorePackage{}}
 	for _, dir := range lines(out) {
 		name := path.Base(dir)
 		data, err := show(ctx, repo, rev, path.Join(dir, metaFile))
@@ -103,7 +103,8 @@ func Index(ctx context.Context, repo, rev, rawBase string) (*resolver.Store, err
 				return nil, fmt.Errorf("%s at %s: %w", name, commit, err)
 			}
 			version := id.Package.Version
-			if _, seen := p.Versions[version]; seen || version == "" {
+			p.Dynamic = manifest.Dynamic(data)
+			if _, seen := p.Versions[version]; (seen && !p.Dynamic) || version == "" {
 				continue
 			}
 			sum := sha256.Sum256(data)
@@ -115,6 +116,15 @@ func Index(ctx context.Context, repo, rev, rawBase string) (*resolver.Store, err
 			}
 			if !yanked {
 				p.Latest = version
+			}
+		}
+		if latest, ok := p.Versions[p.Latest]; ok && p.Dynamic {
+			for _, version := range meta.Yanked {
+				if _, ok := p.Versions[version]; !ok {
+					yanked := *latest
+					yanked.Yanked = true
+					p.Versions[version] = &yanked
+				}
 			}
 		}
 		store.Packages[name] = p
@@ -211,7 +221,7 @@ func checkPackage(ctx context.Context, repo, name string, head, old *resolver.St
 
 	sum := sha256.Sum256(data)
 	if p, ok := old.Packages[name]; ok {
-		if v, ok := p.Versions[m.Package.Version]; ok && v.SHA256 != hex.EncodeToString(sum[:]) {
+		if v, ok := p.Versions[m.Package.Version]; ok && v.SHA256 != hex.EncodeToString(sum[:]) && !manifest.Dynamic(data) {
 			return fmt.Errorf("version %s is already published, a change needs a new version", m.Package.Version)
 		}
 	}

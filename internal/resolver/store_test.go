@@ -26,7 +26,7 @@ func fakeStore(t *testing.T, manifests map[string]string) *httptest.Server {
 	mux := http.NewServeMux()
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	store := Store{Schema: storeSchema, Packages: map[string]*StorePackage{}}
+	store := Store{Schema: StoreSchema, Packages: map[string]*StorePackage{}}
 	for name, content := range manifests {
 		sum := sha256.Sum256([]byte(content))
 		store.Packages[name] = &StorePackage{Latest: "1", Versions: map[string]*StoreVersion{
@@ -89,7 +89,7 @@ func TestStoreChecksumIsEnforced(t *testing.T) {
 	defer server.Close()
 	mux.HandleFunc("/llvm.toml", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(pkg("llvm", ""))) })
 	mux.HandleFunc("/metadata.json", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(Store{Schema: storeSchema, Packages: map[string]*StorePackage{"llvm": {Versions: map[string]*StoreVersion{
+		json.NewEncoder(w).Encode(Store{Schema: StoreSchema, Packages: map[string]*StorePackage{"llvm": {Versions: map[string]*StoreVersion{
 			"1": {URL: server.URL + "/llvm.toml", SHA256: strings.Repeat("0", 64)},
 		}}}})
 	})

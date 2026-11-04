@@ -167,7 +167,7 @@ func (r *resolver) dependency(dep manifest.Dependency, dir string, remote bool) 
 		if !filepath.IsAbs(file) {
 			file = filepath.Join(dir, file)
 		}
-		m, err := loadPackage(file)
+		m, err := loadPackage(file, "")
 		if err != nil {
 			return nil, err
 		}
@@ -186,7 +186,7 @@ func (r *resolver) dependency(dep manifest.Dependency, dir string, remote bool) 
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", dep.URL, err)
 		}
-		m, err := loadPackage(file)
+		m, err := loadPackage(file, "")
 		if err != nil {
 			return nil, err
 		}
@@ -197,7 +197,7 @@ func (r *resolver) dependency(dep manifest.Dependency, dir string, remote bool) 
 		if err != nil {
 			return nil, err
 		}
-		m, err := loadPackage(file)
+		m, err := loadPackage(file, "")
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", dep.URL, err)
 		}
@@ -209,8 +209,8 @@ func (r *resolver) dependency(dep manifest.Dependency, dir string, remote bool) 
 	return nil, fmt.Errorf("unknown source %q", dep.Source)
 }
 
-func loadPackage(file string) (*manifest.Manifest, error) {
-	m, err := manifest.Load(file)
+func loadPackage(file, version string) (*manifest.Manifest, error) {
+	m, err := manifest.LoadVersion(file, version)
 	if err != nil {
 		return nil, err
 	}

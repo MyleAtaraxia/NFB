@@ -193,3 +193,48 @@ func TestCheckRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestDynamicPackageFollowsItsLastCommit(t *testing.T) {
+	r := newRepo(t)
+	source := "[source]\nurl = \"https://example.com/{version}.tar.gz\"\nsha256 = \"" + strings.Repeat("a", 64) + "\"\n"
+	first := r.publish("tool", "1", source)
+	second := r.publish("tool", "1", source+"# a fix to the template\n")
+	if first == second {
+		t.Fatal("the fix made no commit")
+	}
+	s, err := Index(context.Background(), r.dir, "HEAD", "https://raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := s.Packages["tool"]
+	if !p.Dynamic || !strings.Contains(p.Versions["1"].URL, second) {
+		t.Errorf("got %+v, %+v", p, p.Versions["1"])
+	}
+	if _, err := s.Lookup("tool", "0.9"); err != nil {
+		t.Errorf("any version should be accepted: %v", err)
+	}
+	if _, err := Check(context.Background(), r.dir, first); err != nil {
+		t.Errorf("a template can be fixed in place: %v", err)
+	}
+}
+
+func TestDynamicPackageCanYankAnyVersion(t *testing.T) {
+	r := newRepo(t)
+	r.publish("tool", "2", "[source]\nurl = \"https://example.com/{version}.tar.gz\"\nsha256 = \""+strings.Repeat("a", 64)+"\"\n")
+	base := r.git("rev-parse", "HEAD")
+	r.write("packages/tool/meta.toml", meta+"yanked = [\"1.5\"]\n")
+	r.commit()
+	s, err := Index(context.Background(), r.dir, "HEAD", "https://raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Lookup("tool", "1.5"); err == nil {
+		t.Error("a yanked version can't be installed")
+	}
+	if _, err := s.Lookup("tool", "1.6"); err != nil {
+		t.Error(err)
+	}
+	if _, err := Check(context.Background(), r.dir, base); err != nil {
+		t.Error(err)
+	}
+}

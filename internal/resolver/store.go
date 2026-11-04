@@ -10,7 +10,7 @@ import (
 
 const (
 	defaultStore = "https://myleataraxia.github.io/nfb-packages/metadata.json"
-	storeSchema  = 1
+	StoreSchema  = 2
 )
 
 // Store is the package store's metadata.json.
@@ -25,6 +25,7 @@ type StorePackage struct {
 	Homepage    string                   `json:"homepage,omitempty"`
 	Platforms   []string                 `json:"platforms"`
 	Latest      string                   `json:"latest,omitempty"`
+	Dynamic     bool                     `json:"dynamic,omitempty"`
 	Versions    map[string]*StoreVersion `json:"versions"`
 }
 
@@ -65,8 +66,8 @@ func FetchStore(ctx context.Context) (*Store, error) {
 	if err := json.Unmarshal(data, &store); err != nil {
 		return nil, fmt.Errorf("%s: %w", url, err)
 	}
-	if store.Schema != storeSchema {
-		return nil, fmt.Errorf("%s has schema %d, this version of NFB reads %d", url, store.Schema, storeSchema)
+	if store.Schema != StoreSchema {
+		return nil, fmt.Errorf("%s has schema %d, this version of NFB reads %d", url, store.Schema, StoreSchema)
 	}
 	return &store, nil
 }
@@ -87,6 +88,9 @@ func (s *Store) version(name, version string) (*StoreVersion, error) {
 		return nil, fmt.Errorf("the store has no package %q", name)
 	}
 	v, ok := p.Versions[version]
+	if !ok && p.Dynamic {
+		v, ok = p.Versions[p.Latest]
+	}
 	if !ok {
 		return nil, fmt.Errorf("the store has no version %q of %s", version, name)
 	}
@@ -137,7 +141,7 @@ func (r *resolver) storeDependency(dep manifest.Dependency) (*Unit, error) {
 	if err != nil {
 		return nil, err
 	}
-	m, err := loadPackage(file)
+	m, err := loadPackage(file, dep.Version)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", id, err)
 	}

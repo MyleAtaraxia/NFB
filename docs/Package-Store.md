@@ -61,12 +61,39 @@ Versions are the upstream version as it is, such as `1.1.1w` or `4.7.2-stable`. 
 
 Versions come from git history. To publish a new one, edit `package.nfb.toml` and change `version`. Every commit that adds a version is where that version lives, and the version added last is the latest, even if it is an older release.
 
-A published version cannot be changed. To hide a broken one, add it to `meta.toml`:
+A published version cannot be changed, unless the package is dynamic. To hide a broken one, add it to `meta.toml`:
 
 ```toml
 yanked = ["19.1.0"]
 ```
 
 A yanked version cannot be installed and is never the latest. Projects already using it keep working, with a warning.
+
+## Dynamic versions
+
+A package that uses `{version}` can be installed at any version, not only the ones published. NFB replaces `{version}` everywhere in the manifest with the version that was asked for. A shell's `${version}` is left alone.
+
+```toml
+[package]
+name = "cmake"
+version = "4.4.5" # used by nfb install cmake, and the only version sha256 covers
+
+[source]
+url = "https://github.com/Kitware/CMake/releases/download/v{version}/cmake-{version}-linux-x86_64.tar.gz"
+sha256 = "..."
+
+[build]
+image = "debian:bookworm-slim"
+
+[[output.artifact]]
+from = "cmake-{version}-linux-x86_64/"
+to = "."
+```
+
+- `nfb install cmake@3.31.12` uses the same manifest. If that version doesn't exist or doesn't build, pick another version or another package.
+- Only the version in `[package]` is reviewed and has a `sha256` in the manifest. For any other, the checksum is saved to `nfb.lock` on the first download, so that download is trusted as it is.
+- A fix to the manifest doesn't need a new version. `nfb.lock` keeps a project on the manifest it resolved.
+- `nfb store check --build` only builds the version in `[package]`.
+- Any version can be added to `yanked`, even one that was never published.
 
 The history of `main` must never be rewritten, because `metadata.json` links to its commits.
