@@ -252,20 +252,6 @@ func TestGitRefCanBeAnOlderCommit(t *testing.T) {
 	}
 }
 
-func TestFetchedPackageCannotAskForSecrets(t *testing.T) {
-	tempCache(t)
-	dir := t.TempDir()
-	repo := filepath.Join(dir, "repo")
-	write(t, repo+"/package.nfb.toml", strings.Replace(pkg("remote", ""), `image = "x"`, "image = \"x\"\nsecrets = [\"AWS_KEY\"]", 1))
-	git(t, repo, "init", "-q", "-b", "main")
-	commitAll(t, repo)
-
-	_, err := Resolve(context.Background(), write(t, dir+"/package.nfb.toml", pkg("a", gitDep(repo))), Options{})
-	if err == nil || !strings.Contains(err.Error(), "secrets") {
-		t.Errorf("expected a secrets error, got %v", err)
-	}
-}
-
 func TestHostTokenOnlyGoesToItsHostOverHTTPS(t *testing.T) {
 	tempCache(t)
 	var got string

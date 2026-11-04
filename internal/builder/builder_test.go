@@ -74,7 +74,7 @@ func TestGenerateDockerfile(t *testing.T) {
 		"FROM debian:12@sha256:abc AS nfb_u1",
 		"COPY --from=nfb_u0_out / /nfb/deps/tool/",
 		"COPY --exclude=dist --from=nfb_src1 . ./",
-		"RUN --mount=type=cache,id=nfb-cache-app,target=/nfb/cache,sharing=locked --mount=type=secret,id=TOKEN,env=TOKEN [",
+		"RUN --mount=type=cache,id=nfb-cache-app,target=/nfb/cache,sharing=locked --mount=type=secret,id=NFB_SECRET_1_TOKEN,env=TOKEN [",
 		`COPY --from=nfb_u1 ["/nfb/src/bin/","/out/"]`,
 		`COPY --from=nfb_u1 ["/usr/bin/x","/x"]`,
 	} {
@@ -139,5 +139,50 @@ func TestInterruptedBuildCleansUp(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("left %d entries behind", len(entries))
+	}
+}
+
+func TestSecretsStayWithTheirUnit(t *testing.T) {
+	t.Setenv("TOKEN", "real")
+	dep := &resolver.Unit{Remote: true, Depth: 1, Manifest: &manifest.Manifest{
+		Package: &manifest.Identity{Name: "dep", Version: "1"},
+		Build:   manifest.Build{Secrets: []string{"TOKEN"}, SecretDefaults: map[string]string{"TOKEN": "fallback"}},
+	}}
+	root := &resolver.Unit{Manifest: &manifest.Manifest{
+		Project: &manifest.Identity{Name: "app"},
+		Build:   manifest.Build{Secrets: []string{"TOKEN"}},
+	}}
+	g := &resolver.Graph{Units: []*resolver.Unit{dep, root}, Lock: &resolver.Lock{}}
+
+	_, values, err := hostSecrets(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "NFB_SECRET_0_TOKEN_DEFAULT=fallback,NFB_SECRET_1_TOKEN=real"; strings.Join(values, ",") != want {
+		t.Errorf("got %v", values)
+	}
+	if !strings.Contains(mounts(g, 0, dep), "id=NFB_SECRET_0_TOKEN_DEFAULT,env=TOKEN") {
+		t.Errorf("a default must not share a cached layer with the real secret: %s", mounts(g, 0, dep))
+	}
+}
+
+func TestSecretErrors(t *testing.T) {
+	unit := func(remote bool) *resolver.Graph {
+		u := &resolver.Unit{Remote: remote, Depth: 1, Manifest: &manifest.Manifest{
+			Package: &manifest.Identity{Name: "dep", Version: "1"},
+			Build:   manifest.Build{Secrets: []string{"NFB_TEST_UNSET"}},
+		}}
+		return &resolver.Graph{Units: []*resolver.Unit{u}, Lock: &resolver.Lock{}}
+	}
+	if _, _, err := hostSecrets(unit(true)); err == nil || !strings.Contains(err.Error(), "approved") {
+		t.Errorf("got %v", err)
+	}
+	if _, _, err := hostSecrets(unit(false)); err == nil || !strings.Contains(err.Error(), "isn't set") {
+		t.Errorf("got %v", err)
+	}
+	nested := unit(true)
+	nested.Units[0].Depth = 2
+	if _, _, err := hostSecrets(nested); err == nil || !strings.Contains(err.Error(), "direct") {
+		t.Errorf("got %v", err)
 	}
 }

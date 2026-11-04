@@ -47,7 +47,7 @@ command = [
 
 # [[dependency]]
 # name = "example" # optional, for debugging/readability only
-# source = "cmd"   # cmd | git | url | local
+# source = "cmd"   # cmd | git | url | local | store
 # command = [
 #   "apt install -y example"
 # ]

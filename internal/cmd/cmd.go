@@ -46,6 +46,11 @@ var buildCmd = &cobra.Command{
 		if err := g.PinImages(cmd.Context()); err != nil {
 			return err
 		}
+		if !locked {
+			if err := approveSecrets(g, true); err != nil {
+				return err
+			}
+		}
 		if locked {
 			if g.LockChanged() {
 				return errors.New("nfb.lock is out of date, run nfb update")
