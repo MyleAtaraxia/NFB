@@ -145,11 +145,16 @@ var searchCmd = &cobra.Command{
 		if len(args) > 0 {
 			term = strings.ToLower(args[0])
 		}
+		found := false
 		for _, name := range slices.Sorted(maps.Keys(s.Packages)) {
 			p := s.Packages[name]
 			if strings.Contains(name, term) || strings.Contains(strings.ToLower(p.Description), term) {
 				fmt.Printf("%s %s - %s\n", name, p.Latest, p.Description)
+				found = true
 			}
+		}
+		if !found {
+			fmt.Println("no packages found")
 		}
 		return nil
 	},

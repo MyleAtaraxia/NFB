@@ -6,7 +6,7 @@ A build is identified by its manifest hash, dependency hashes, image, environmen
 
 Branch names in `ref` and image tags such as `debian:bookworm-slim` are allowed. `nfb.lock` records the resolved commits, image digests, checksums, store packages and approved secrets.
 
-When a `url` download has no `sha256`, NFB saves its checksum to `nfb.lock` on the first fetch. Later builds fail if the file changes.
+When a `url` download has no `sha256`, NFB saves its checksum to `nfb.lock` on the first fetch. Later downloads of that file fail if it changed.
 
 `ref` can be a branch, a tag or a commit. To pin something exactly, use a commit in `ref` and a `sha256` for downloads.
 
