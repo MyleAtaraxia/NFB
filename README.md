@@ -39,7 +39,7 @@ built hello to /path/to/project/dist
 You need [Go](https://go.dev/dl/) 1.26 or newer to install NFB, and [Docker](https://docs.docker.com/get-docker/) and git to run it.
 
 ```sh
-go install github.com/MyleAtaraxia/NFB/cmd/nfb@latest
+go install github.com/MyleAtaraxia/nfb@latest
 ```
 
 ## Features

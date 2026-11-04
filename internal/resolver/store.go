@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/MyleAtaraxia/NFB/internal/manifest"
+	"github.com/MyleAtaraxia/nfb/internal/manifest"
 	"os"
 )
 

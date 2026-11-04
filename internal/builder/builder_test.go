@@ -3,8 +3,8 @@ package builder
 import (
 	"archive/zip"
 	"context"
-	"github.com/MyleAtaraxia/NFB/internal/manifest"
-	"github.com/MyleAtaraxia/NFB/internal/resolver"
+	"github.com/MyleAtaraxia/nfb/internal/manifest"
+	"github.com/MyleAtaraxia/nfb/internal/resolver"
 	"os"
 	"path/filepath"
 	"strings"

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/MyleAtaraxia/NFB/internal/cmd"
+	"github.com/MyleAtaraxia/nfb/internal/cmd"
 	"os"
 )
 
