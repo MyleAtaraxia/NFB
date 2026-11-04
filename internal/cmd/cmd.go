@@ -27,8 +27,8 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:          "nfb",
-	Short:        "Nix for Builds",
-	Long:         `NFB (Nix for Builds) provides declarable and reproducible dependency management for build systems, just like NIX but anywhere and for builds (who would've thought)'.`,
+	Short:        "NFB For Builds",
+	Long:         `NFB (NFB For Builds) provides declarable and reproducible dependency management for build systems.`,
 	SilenceUsage: true,
 }
 

@@ -1,0 +1,17 @@
+name: Wiki
+
+on:
+  push:
+    branches: [master]
+    paths: ["docs/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh .github/sync-wiki.sh "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.wiki.git"
