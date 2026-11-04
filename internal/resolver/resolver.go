@@ -19,6 +19,19 @@ type Unit struct {
 	SourceDir string
 	Archive   string
 	Deps      []*Unit
+	Remote    bool // fetched, rather than part of the user's own files
+	Depth     int  // shortest distance from the root
+}
+
+// reach records a shorter path to this unit, which also brings its dependencies closer.
+func (u *Unit) reach(depth int) {
+	if depth >= u.Depth {
+		return
+	}
+	u.Depth = depth
+	for _, dep := range u.Deps {
+		dep.reach(depth + 1)
+	}
 }
 
 func (u *Unit) Name() string {
@@ -43,6 +56,7 @@ type resolver struct {
 	ctx   context.Context
 	graph *Graph
 	cache string
+	store *Store
 	units map[string]*Unit
 	stack []string
 }
@@ -81,7 +95,9 @@ func Resolve(ctx context.Context, manifestPath string, opts Options) (*Graph, er
 		return nil, err
 	}
 	if opts.Update {
-		oldLock = newLock()
+		fresh := newLock()
+		fresh.Secrets = oldLock.Secrets
+		oldLock = fresh
 	}
 
 	r := &resolver{
@@ -93,11 +109,13 @@ func Resolve(ctx context.Context, manifestPath string, opts Options) (*Graph, er
 	if _, err := r.unit("root", m, filepath.Dir(root), false); err != nil {
 		return nil, err
 	}
+	r.graph.keepApprovals()
 	return r.graph, nil
 }
 
 func (r *resolver) unit(key string, m *manifest.Manifest, dir string, remote bool) (*Unit, error) {
 	if u, ok := r.units[key]; ok {
+		u.reach(len(r.stack))
 		return u, nil
 	}
 
@@ -105,13 +123,10 @@ func (r *resolver) unit(key string, m *manifest.Manifest, dir string, remote boo
 	if slices.Contains(r.stack, id) {
 		return nil, fmt.Errorf("dependency cycle: %s -> %s", strings.Join(r.stack, " -> "), id)
 	}
-	if remote && len(m.Build.Secrets) > 0 {
-		return nil, fmt.Errorf("%s: a fetched package cannot ask for secrets", id)
-	}
+	u := &Unit{Manifest: m, SourceDir: dir, Remote: remote, Depth: len(r.stack)}
 	r.stack = append(r.stack, id)
 	defer func() { r.stack = r.stack[:len(r.stack)-1] }()
 
-	u := &Unit{Manifest: m, SourceDir: dir}
 	for _, dep := range m.Dependencies {
 		if dep.Source == "cmd" {
 			continue
@@ -187,6 +202,9 @@ func (r *resolver) dependency(dep manifest.Dependency, dir string, remote bool) 
 			return nil, fmt.Errorf("%s: %w", dep.URL, err)
 		}
 		return r.unit("url:"+sum, m, "", true)
+
+	case "store":
+		return r.storeDependency(dep)
 	}
 	return nil, fmt.Errorf("unknown source %q", dep.Source)
 }

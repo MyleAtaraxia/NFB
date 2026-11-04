@@ -2,6 +2,7 @@
 - [Project TOML](Project-TOML.md)
 - [Package TOML](Package-TOML.md)
 - [Dependencies](Dependencies.md)
+- [Package store](Package-Store.md)
 - [Build behaviour](Build-Behaviour.md)
 - [Caching](Caching.md)
 - [Secrets and private sources](Secrets.md)

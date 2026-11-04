@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -19,10 +20,69 @@ type Lock struct {
 	Git       map[string]string `toml:"git"`
 	Checksums map[string]string `toml:"checksum"`
 	Images    map[string]string `toml:"image"`
+	Store     map[string]string `toml:"store"`
+	// Secrets lists what the user allowed each fetched package to read.
+	Secrets map[string][]string `toml:"secrets"`
+}
+
+// SecretApprovalDepth is how far below the root NFB asks about secrets. Fetched packages deeper
+// than this can't get a secret from the host, and fall back to their default.
+const SecretApprovalDepth = 1
+
+// SecretRequest is a secret a fetched package wants and hasn't been given.
+type SecretRequest struct {
+	Package  string
+	Secret   string
+	Optional bool
+}
+
+func (g *Graph) keepApprovals() {
+	for _, u := range g.Units {
+		if approved, ok := g.oldLock.Secrets[u.Name()]; ok && u.Remote {
+			g.Lock.Secrets[u.Name()] = approved
+		}
+	}
+}
+
+// SecretAllowed reports whether a unit may read a secret from the host.
+func (g *Graph) SecretAllowed(u *Unit, secret string) bool {
+	if !u.Remote {
+		return true
+	}
+	return u.Depth <= SecretApprovalDepth && slices.Contains(g.Lock.Secrets[u.Name()], secret)
+}
+
+// SecretRequests lists what still needs the user's answer.
+func (g *Graph) SecretRequests() []SecretRequest {
+	var requests []SecretRequest
+	for _, u := range g.Units {
+		if !u.Remote || u.Depth > SecretApprovalDepth {
+			continue
+		}
+		for _, secret := range u.Manifest.Build.Secrets {
+			if !g.SecretAllowed(u, secret) {
+				_, optional := u.Manifest.Build.SecretDefaults[secret]
+				requests = append(requests, SecretRequest{u.Name(), secret, optional})
+			}
+		}
+	}
+	return requests
+}
+
+func (g *Graph) ApproveSecret(req SecretRequest) {
+	approved := append(slices.Clone(g.Lock.Secrets[req.Package]), req.Secret)
+	slices.Sort(approved)
+	g.Lock.Secrets[req.Package] = approved
 }
 
 func newLock() *Lock {
-	return &Lock{Git: map[string]string{}, Checksums: map[string]string{}, Images: map[string]string{}}
+	return &Lock{
+		Git:       map[string]string{},
+		Checksums: map[string]string{},
+		Images:    map[string]string{},
+		Store:     map[string]string{},
+		Secrets:   map[string][]string{},
+	}
 }
 
 func ReadLock(path string) (*Lock, error) {

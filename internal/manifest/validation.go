@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -14,7 +15,15 @@ var (
 	envPattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	imagePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]*$`)
 	sha256Pattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+	storeName     = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	storeVersion  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]*$`)
 )
+
+// StoreName reports whether a name can be used in the package store.
+func StoreName(name string) bool { return storeName.MatchString(name) }
+
+// StoreVersion reports whether a version can be used in the package store.
+func StoreVersion(version string) bool { return storeVersion.MatchString(version) }
 
 func Validate(m *Manifest) error {
 	if m.Project == nil && m.Package == nil {
@@ -37,6 +46,11 @@ func Validate(m *Manifest) error {
 	for _, name := range m.Build.Secrets {
 		if !envPattern.MatchString(name) {
 			return fmt.Errorf("invalid secret name %q", name)
+		}
+	}
+	for name := range m.Build.SecretDefaults {
+		if !slices.Contains(m.Build.Secrets, name) {
+			return fmt.Errorf("secret_defaults has %q, which isn't in secrets", name)
 		}
 	}
 
@@ -108,14 +122,14 @@ func validateDependency(dep Dependency) error {
 		return nil
 	}
 
-	url, ref, path, sha, command := dep.URL != "", dep.Ref != "", dep.Path != "", dep.SHA256 != "", len(dep.Commands) > 0
+	url, ref, path, sha, command, version := dep.URL != "", dep.Ref != "", dep.Path != "", dep.SHA256 != "", len(dep.Commands) > 0, dep.Version != ""
 
 	switch dep.Source {
 	case "cmd":
 		if !command {
 			return fail("source \"cmd\" needs command")
 		}
-		return forbid(map[string]bool{"url": url, "ref": ref, "path": path, "sha256": sha})
+		return forbid(map[string]bool{"url": url, "ref": ref, "path": path, "sha256": sha, "version": version})
 	case "git":
 		if !url || !ref {
 			return fail("source \"git\" needs url and ref")
@@ -126,7 +140,7 @@ func validateDependency(dep Dependency) error {
 		if path && !filepath.IsLocal(filepath.FromSlash(dep.Path)) {
 			return fail("git path %q must stay inside the repository", dep.Path)
 		}
-		return forbid(map[string]bool{"sha256": sha, "command": command})
+		return forbid(map[string]bool{"sha256": sha, "command": command, "version": version})
 	case "url":
 		if err := validateURL(dep.URL); err != nil {
 			return fail("%v", err)
@@ -134,12 +148,20 @@ func validateDependency(dep Dependency) error {
 		if err := validateSHA256(dep.SHA256); err != nil {
 			return fail("%v", err)
 		}
-		return forbid(map[string]bool{"ref": ref, "path": path, "command": command})
+		return forbid(map[string]bool{"ref": ref, "path": path, "command": command, "version": version})
 	case "local":
 		if !path {
 			return fail("source \"local\" needs path")
 		}
-		return forbid(map[string]bool{"url": url, "ref": ref, "sha256": sha, "command": command})
+		return forbid(map[string]bool{"url": url, "ref": ref, "sha256": sha, "command": command, "version": version})
+	case "store":
+		if !StoreName(dep.Name) {
+			return fail("source \"store\" needs the package's name")
+		}
+		if !StoreVersion(dep.Version) {
+			return fail("source \"store\" needs an exact version")
+		}
+		return forbid(map[string]bool{"url": url, "ref": ref, "path": path, "sha256": sha, "command": command})
 	default:
 		return fail("unknown source %q", dep.Source)
 	}

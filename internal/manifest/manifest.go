@@ -36,6 +36,8 @@ type Build struct {
 	Env      map[string]string `toml:"env"`
 	Commands []string          `toml:"command"`
 	Secrets  []string          `toml:"secrets"`
+	// SecretDefaults is used when a secret isn't set or isn't approved, which makes it optional.
+	SecretDefaults map[string]string `toml:"secret_defaults"`
 }
 
 type Dependency struct {
@@ -45,6 +47,7 @@ type Dependency struct {
 	Ref      string   `toml:"ref"`
 	Path     string   `toml:"path"`
 	SHA256   string   `toml:"sha256"`
+	Version  string   `toml:"version"`
 	Commands []string `toml:"command"`
 }
 

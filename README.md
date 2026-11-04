@@ -44,7 +44,8 @@ go install github.com/MyleAtaraxia/NFB/cmd/nfb@latest
 
 ## Features
 
-- **Dependencies from anywhere:** a shell command, a git repository, a direct link or a local path.
+- **Dependencies from anywhere:** a shell command, a git repository, a direct link, a local path or the package store.
+- **Package store:** add a package with `nfb install llvm-mingw`.
 - **Packages:** a dependency can be its own NFB package, built separately and imported through an `[init]` hook.
 - **Pinning:** `nfb.lock` records exact git commits, image digests and checksums.
 - **Fast rebuilds:** `/nfb/cache` keeps compiler caches between builds.
@@ -55,6 +56,9 @@ go install github.com/MyleAtaraxia/NFB/cmd/nfb@latest
 | Command             | What it does                                            |
 |---------------------|---------------------------------------------------------|
 | `nfb init`          | Create a starter manifest                               |
+| `nfb install <name>`| Add a package from the store                            |
+| `nfb remove <name>` | Remove a store package                                  |
+| `nfb search [term]` | Search the package store                                |
 | `nfb build`         | Resolve dependencies and build the project              |
 | `nfb build --locked`| Build without changing `nfb.lock`, for CI               |
 | `nfb update`        | Re-resolve every ref, checksum and image                |

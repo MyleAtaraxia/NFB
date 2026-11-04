@@ -87,14 +87,14 @@ func Build(ctx context.Context, g *resolver.Graph, opts Options) (string, error)
 	if opts.NoCache {
 		args = append(args, "--no-cache")
 	}
-	secrets, err := hostSecrets(g)
+	secrets, values, err := hostSecrets(g)
 	if err != nil {
 		return "", err
 	}
 	args = append(args, secrets...)
 
 	cmd := resolver.Command(ctx, "docker", append(append(args, "--progress=plain"), gen)...)
-	cmd.Env = append(cmd.Environ(), "DOCKER_BUILDKIT=1")
+	cmd.Env = append(append(cmd.Environ(), "DOCKER_BUILDKIT=1"), values...)
 	var logs bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &logs, &logs
 	if opts.Verbose {
@@ -111,19 +111,57 @@ func Build(ctx context.Context, g *resolver.Graph, opts Options) (string, error)
 	return out, nil
 }
 
-func hostSecrets(g *resolver.Graph) ([]string, error) {
-	var args []string
-	for _, u := range g.Units {
-		for _, name := range u.Manifest.Build.Secrets {
-			if _, ok := os.LookupEnv(name); !ok {
-				return nil, fmt.Errorf("%s needs the secret %s, but it isn't set", u.Name(), name)
-			}
-			if flag := "id=" + name + ",env=" + name; !slices.Contains(args, flag) {
-				args = append(args, "--secret", flag)
-			}
+// secretValue finds what a unit gets for a secret, if anything.
+func secretValue(g *resolver.Graph, u *resolver.Unit, name string) (value string, isDefault, ok bool) {
+	if g.SecretAllowed(u, name) {
+		if value, ok = os.LookupEnv(name); ok {
+			return value, false, true
 		}
 	}
-	return args, nil
+	value, ok = u.Manifest.Build.SecretDefaults[name]
+	return value, ok, ok
+}
+
+// secretID is unique per unit, because Docker hands a secret to every step that names its id,
+// and an approval for one package must not reach another that asks for the same variable.
+// A default gets its own id because Docker's cache ignores secret values, and a build without
+// the secret must not reuse a layer that was made with it.
+func secretID(g *resolver.Graph, i int, name string) string {
+	id := fmt.Sprintf("NFB_SECRET_%d_%s", i, name)
+	if _, isDefault, _ := secretValue(g, g.Units[i], name); isDefault {
+		id += "_DEFAULT"
+	}
+	return id
+}
+
+func hostSecrets(g *resolver.Graph) (args, values []string, err error) {
+	for i, u := range g.Units {
+		for _, name := range u.Manifest.Build.Secrets {
+			value, _, ok := secretValue(g, u, name)
+			switch {
+			case ok:
+			case g.SecretAllowed(u, name):
+				return nil, nil, fmt.Errorf("%s needs the secret %s, but it isn't set", u.Name(), name)
+			case u.Depth > resolver.SecretApprovalDepth:
+				return nil, nil, fmt.Errorf("%s needs the secret %s, but only direct dependencies can be given secrets", u.Name(), name)
+			default:
+				return nil, nil, fmt.Errorf("%s asks for the secret %s, which hasn't been approved", u.Name(), name)
+			}
+			id := secretID(g, i, name)
+			args = append(args, "--secret", "id="+id+",env="+id)
+			values = append(values, id+"="+value)
+		}
+	}
+	return args, values, nil
+}
+
+// Platform returns what Docker builds for here, or "" if it can't tell.
+func Platform(ctx context.Context) string {
+	out, err := resolver.Command(ctx, "docker", "version", "--format", "{{.Server.Os}}/{{.Server.Arch}}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func outputDir(g *resolver.Graph, override string) (string, error) {
@@ -190,7 +228,7 @@ func generate(g *resolver.Graph, gen, out string) (map[string]string, error) {
 		if err := os.WriteFile(filepath.Join(gen, dir, "run.sh"), []byte(script(u)), 0o644); err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(&df, "COPY %s/run.sh /nfb/run.sh\nRUN %s [\"/bin/sh\", \"/nfb/run.sh\"]\n", dir, mounts(u))
+		fmt.Fprintf(&df, "COPY %s/run.sh /nfb/run.sh\nRUN %s [\"/bin/sh\", \"/nfb/run.sh\"]\n", dir, mounts(g, i, u))
 
 		fmt.Fprintf(&df, "FROM scratch AS %s\n", outStage(i))
 		for _, a := range m.Artifacts() {
@@ -212,10 +250,10 @@ func generate(g *resolver.Graph, gen, out string) (map[string]string, error) {
 	return contexts, os.WriteFile(filepath.Join(gen, "Dockerfile"), []byte(df.String()), 0o644)
 }
 
-func mounts(u *resolver.Unit) string {
+func mounts(g *resolver.Graph, i int, u *resolver.Unit) string {
 	flags := []string{fmt.Sprintf("--mount=type=cache,id=nfb-cache-%s,target=%s,sharing=locked", u.Name(), cacheDir)}
 	for _, name := range u.Manifest.Build.Secrets {
-		flags = append(flags, fmt.Sprintf("--mount=type=secret,id=%s,env=%s", name, name))
+		flags = append(flags, fmt.Sprintf("--mount=type=secret,id=%s,env=%s", secretID(g, i, name), name))
 	}
 	return strings.Join(flags, " ")
 }
