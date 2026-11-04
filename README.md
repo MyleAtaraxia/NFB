@@ -30,8 +30,8 @@ to = "."
 $ nfb build
 
 Well hello there~
-building hello
-built hello to /path/to/project/dist
+Let's build hello~
+All done~ hello is in /path/to/project/dist
 ```
 
 ## Install

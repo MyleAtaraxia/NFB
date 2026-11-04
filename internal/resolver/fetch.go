@@ -261,7 +261,7 @@ func (r *resolver) fetchTo(url string, dst *os.File) (string, error) {
 		if err == nil || !retry || attempt == downloadAttempts || r.ctx.Err() != nil {
 			return sum, err
 		}
-		fmt.Fprintf(os.Stderr, "retrying after: %v\n", err)
+		fmt.Fprintf(os.Stderr, "That didn't work, trying again~ (%v)\n", err)
 		select {
 		case <-r.ctx.Done():
 			return "", r.ctx.Err()

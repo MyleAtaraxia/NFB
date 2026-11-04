@@ -63,7 +63,7 @@ var buildCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Println("built", g.Root().Name(), "to", out)
+		fmt.Printf("All done~ %s is in %s\n", g.Root().Name(), out)
 		return nil
 	},
 }
@@ -88,11 +88,11 @@ var initCmd = &cobra.Command{
 	Short: "Create a starter manifest in the current directory",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		reader := bufio.NewReader(os.Stdin)
-		name, err := prompt(reader, "What is the name of your project? (default is 'NfbProject')", "NfbProject")
+		name, err := prompt(reader, "What should we call your project? (NfbProject)", "NfbProject")
 		if err != nil {
 			return err
 		}
-		projectType, err := prompt(reader, "What is your project's type? (accepted values are 'project' and 'package', the default is project)", "project")
+		projectType, err := prompt(reader, "Is it a project or a package? (project)", "project")
 		if err != nil {
 			return err
 		}

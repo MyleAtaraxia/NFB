@@ -100,7 +100,7 @@ func Build(ctx context.Context, g *resolver.Graph, opts Options) (string, error)
 	if opts.Verbose {
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	}
-	fmt.Fprintln(os.Stderr, "building", g.Root().Name())
+	fmt.Fprintf(os.Stderr, "Let's build %s~\n", g.Root().Name())
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return "", errors.New("build interrupted")

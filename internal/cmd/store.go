@@ -106,7 +106,7 @@ var installCmd = &cobra.Command{
 		if err := applyManifest(cmd.Context(), original, edited, true); err != nil {
 			return err
 		}
-		fmt.Println("installed", name, version)
+		fmt.Printf("%s %s is all yours~\n", name, version)
 		return nil
 	},
 }
@@ -127,7 +127,7 @@ var removeCmd = &cobra.Command{
 		if err := applyManifest(cmd.Context(), original, edited, false); err != nil {
 			return err
 		}
-		fmt.Println("removed", args[0])
+		fmt.Printf("Bye bye, %s~\n", args[0])
 		return nil
 	},
 }
@@ -154,7 +154,7 @@ var searchCmd = &cobra.Command{
 			}
 		}
 		if !found {
-			fmt.Println("no packages found")
+			fmt.Println("Nothing here, sorry~")
 		}
 		return nil
 	},
