@@ -64,3 +64,7 @@ go install github.com/MyleAtaraxia/NFB/cmd/nfb@latest
 ## Documentation
 
 The [documentation](docs/Home.md) covers every manifest option and how builds behave.
+
+## License
+
+[MIT](LICENSE)
