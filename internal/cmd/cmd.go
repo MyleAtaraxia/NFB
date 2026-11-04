@@ -9,6 +9,7 @@ import (
 	"github.com/MyleAtaraxia/nfb/internal/resolver"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 
@@ -168,9 +169,17 @@ func init() {
 	rootCmd.AddCommand(buildCmd, initCmd, cleanCmd, graphCmd, updateCmd)
 }
 
+func version() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return info.Main.Version
+	}
+	return "unknown"
+}
+
 func Execute() error {
 	fmt.Println("\nWell hello there~")
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	rootCmd.Version = version()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return rootCmd.ExecuteContext(ctx)

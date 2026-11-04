@@ -64,6 +64,7 @@ go install github.com/MyleAtaraxia/nfb@latest
 | `nfb update`        | Re-resolve every ref, checksum and image                |
 | `nfb graph`         | Print the dependency graph in build order               |
 | `nfb clean`         | Remove fetched repositories and downloads               |
+| `nfb -v`            | Print the version                                       |
 
 ## Documentation
 
